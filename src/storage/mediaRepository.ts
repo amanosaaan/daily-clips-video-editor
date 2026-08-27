@@ -57,7 +57,10 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
-const METADATA_TIMEOUT_MS = 15000;
+// 大きな動画ファイルではモバイル回線/端末次第でloadeddata等までにこの程度掛かることも
+// あるため、誤って「失敗」と判定しすぎないよう余裕を持たせている(useProjectPlaybackEngine.ts
+// のMEDIA_LOAD_TIMEOUT_MSと同じ値に揃えている)。
+const METADATA_TIMEOUT_MS = 30000;
 
 async function readVideoMetadata(url: string): Promise<{ durationMs: number; width: number; height: number }> {
   const video = document.createElement('video');

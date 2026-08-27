@@ -8,12 +8,15 @@ export interface ClipImportProgress {
   total: number;
 }
 
-// addMediaFile内部の各処理(動画メタデータ読み込み等)には既に個別のタイムアウトが
-// 掛かっているが、万一それでも想定外の理由で応答が返らなかった場合の最終防衛ライン。
-// これが無いと、1ファイルでも詰まると「次のファイルへ進まない(ボタンも反応しない)」
-// まま importing が true に張り付いてしまう(既存のimportingで全ボタンを無効化する
-// UIの副作用)。
-const IMPORT_FILE_TIMEOUT_MS = 30000;
+// addMediaFile内部では、IndexedDB書き込み・動画メタデータ取得・サムネイル生成の
+// それぞれに個別のタイムアウト(mediaRepository.tsのMETADATA_TIMEOUT_MS、現在30秒)が
+// 順番に掛かりうるため、ここはその合計より確実に大きい値にしておく(そうしないと、
+// 内側がまだ粘っている途中でここが先に諦めてしまい、本来成功したはずのファイルを
+// 失敗扱いにしてしまう)。あくまで「内側の対策が万一すり抜けた場合」の最終防衛ラインで、
+// 通常はここまで待たされることは無い想定。これが無いと、1ファイルでも詰まると
+// 「次のファイルへ進まない(ボタンも反応しない)」まま importing が true に張り付いてしまう
+// (既存のimportingで全ボタンを無効化するUIの副作用)。
+const IMPORT_FILE_TIMEOUT_MS = 100000;
 function withImportTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error('ファイルの取り込みがタイムアウトしました')), ms);

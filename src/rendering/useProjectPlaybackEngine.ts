@@ -37,8 +37,11 @@ const SEEK_THRESHOLD_PAUSED_SEC = 0.08;
 
 // 端末やファイル形式によってはloadeddata/onerrorのどちらも一切発火しないことがあり、
 // その場合Promiseが永久に解決しない(=このシーンより後の素材が一切読み込まれなくなる)。
-// 一定時間で必ず諦めて次に進むための安全弁。
-const MEDIA_LOAD_TIMEOUT_MS = 15000;
+// 一定時間で必ず諦めて次に進むための安全弁。大きな動画ファイルではモバイル回線/端末次第で
+// loadeddataまでにこの程度掛かることもあるため、誤って「失敗」と判定しすぎないよう
+// ある程度余裕を持たせている(タイムアウト後に実際は成功した場合はclearMediaLoadErrorで
+// 後から取り消す)。
+const MEDIA_LOAD_TIMEOUT_MS = 30000;
 function raceTimeout(promise: Promise<void>, ms: number): Promise<'ok' | 'timeout'> {
   return Promise.race([
     promise.then((): 'ok' => 'ok'),
@@ -96,6 +99,16 @@ export function useProjectPlaybackEngine(
     if (mediaLoadErrorsRef.current.has(mediaId)) return;
     mediaLoadErrorsRef.current = new Set(mediaLoadErrorsRef.current).add(mediaId);
     setMediaLoadErrors(mediaLoadErrorsRef.current);
+  }, []);
+  // タイムアウト(MEDIA_LOAD_TIMEOUT_MS)で一旦「失敗」扱いにした後、実際にはそれより遅れて
+  // loadeddata/onloadが発火して読み込めていた、というケースの誤検知を取り消す
+  // (video.onloadeddata等のハンドラはPromise解決後も外していないため、遅れて呼ばれうる)。
+  const clearMediaLoadError = useCallback((mediaId: string) => {
+    if (!mediaLoadErrorsRef.current.has(mediaId)) return;
+    const next = new Set(mediaLoadErrorsRef.current);
+    next.delete(mediaId);
+    mediaLoadErrorsRef.current = next;
+    setMediaLoadErrors(next);
   }, []);
   const [playbackRate, setPlaybackRateState] = useState(1);
   const playbackRateRef = useRef(1);
@@ -226,7 +239,10 @@ export function useProjectPlaybackEngine(
               const mediaId = layer.mediaId;
               const outcome = await raceTimeout(
                 new Promise<void>((resolve) => {
-                  video.onloadeddata = () => resolve();
+                  video.onloadeddata = () => {
+                    clearMediaLoadError(mediaId);
+                    resolve();
+                  };
                   // video.error.codeでコーデック非対応(MEDIA_ERR_SRC_NOT_SUPPORTED=4)か
                   // デコード失敗(MEDIA_ERR_DECODE=3)かなどが分かる。
                   video.onerror = () => {
@@ -245,7 +261,10 @@ export function useProjectPlaybackEngine(
               const mediaId = layer.mediaId;
               const outcome = await raceTimeout(
                 new Promise<void>((resolve) => {
-                  img.onload = () => resolve();
+                  img.onload = () => {
+                    clearMediaLoadError(mediaId);
+                    resolve();
+                  };
                   img.onerror = (err) => {
                     reportMediaLoadError(mediaId, url, err);
                     resolve();
@@ -266,7 +285,10 @@ export function useProjectPlaybackEngine(
             const mediaId = layer.mediaId;
             const outcome = await raceTimeout(
               new Promise<void>((resolve) => {
-                audio.onloadeddata = () => resolve();
+                audio.onloadeddata = () => {
+                  clearMediaLoadError(mediaId);
+                  resolve();
+                };
                 audio.onerror = () => {
                   reportMediaLoadError(mediaId, url, audio.error);
                   resolve();
