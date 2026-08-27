@@ -1,7 +1,11 @@
 import {
+  ALL_FORMATS,
+  AudioBufferSink,
   AudioBufferSource,
+  BlobSource,
   BufferTarget,
   CanvasSource,
+  Input,
   Mp4OutputFormat,
   Output,
   QUALITY_HIGH,
@@ -136,6 +140,72 @@ async function loadImageElement(url: string): Promise<HTMLImageElement> {
   return img;
 }
 
+function scheduleDecodedBuffer(
+  offlineCtx: OfflineAudioContext,
+  decoded: AudioBuffer,
+  trimStartMs: number,
+  volume: number,
+  sceneStartMs: number,
+  sceneDurationMs: number,
+): boolean {
+  const offsetSec = trimStartMs / 1000;
+  const durationSec = Math.min(sceneDurationMs / 1000, Math.max(0, decoded.duration - offsetSec));
+  if (durationSec <= 0) return false;
+  const source = offlineCtx.createBufferSource();
+  source.buffer = decoded;
+  const gain = offlineCtx.createGain();
+  gain.gain.value = volume;
+  source.connect(gain).connect(offlineCtx.destination);
+  source.start(sceneStartMs / 1000, offsetSec, durationSec);
+  return true;
+}
+
+/**
+ * iPhoneのカメラで撮影した.movは、通常のAAC音声トラックに加えてApple独自の空間音声
+ * (apacコーデック、ブラウザ未対応)や複数のメタデータトラック(mebx)を同梱していることが
+ * あり、この構成のファイルではブラウザ標準のdecodeAudioDataがEncodingErrorで失敗する
+ * ことが実機で確認された(LINE等で再エンコードされた通常のAAC単体ファイルでは問題なし)。
+ * mediabunny(WebCodecsベースの自前デマルチプレクサ/デコーダー、書き出し用に既に導入
+ * 済み)であれば、主音声トラック(AAC)だけを明示的に選んでデコードできるため、
+ * decodeAudioDataが失敗した場合のフォールバックとして使う。
+ */
+async function scheduleAudioSourceViaMediabunny(
+  offlineCtx: OfflineAudioContext,
+  blob: Blob,
+  trimStartMs: number,
+  volume: number,
+  sceneStartMs: number,
+  sceneDurationMs: number,
+): Promise<boolean> {
+  const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+  const track = await input.getPrimaryAudioTrack();
+  if (!track) return false;
+
+  const offsetSec = trimStartMs / 1000;
+  const endSec = offsetSec + sceneDurationMs / 1000;
+  const gain = offlineCtx.createGain();
+  gain.gain.value = volume;
+  gain.connect(offlineCtx.destination);
+
+  const sink = new AudioBufferSink(track);
+  let scheduledAny = false;
+  for await (const chunk of sink.buffers(offsetSec, endSec)) {
+    const chunkStartInClip = Math.max(chunk.timestamp, offsetSec);
+    const chunkEndInClip = Math.min(chunk.timestamp + chunk.duration, endSec);
+    const playDurationSec = chunkEndInClip - chunkStartInClip;
+    if (playDurationSec <= 0) continue;
+    const withinBufferOffsetSec = chunkStartInClip - chunk.timestamp;
+    const atTime = sceneStartMs / 1000 + (chunkStartInClip - offsetSec);
+    if (atTime < 0) continue;
+    const source = offlineCtx.createBufferSource();
+    source.buffer = chunk.buffer;
+    source.connect(gain);
+    source.start(atTime, withinBufferOffsetSec, playDurationSec);
+    scheduledAny = true;
+  }
+  return scheduledAny;
+}
+
 async function scheduleAudioSource(
   offlineCtx: OfflineAudioContext,
   mediaId: string,
@@ -144,21 +214,23 @@ async function scheduleAudioSource(
   sceneStartMs: number,
   sceneDurationMs: number,
 ): Promise<boolean> {
+  const blob = await getMediaBlob(mediaId);
+  if (!blob) return false;
+
   try {
-    const blob = await getMediaBlob(mediaId);
-    if (!blob) return false;
     const arrayBuffer = await blob.arrayBuffer();
     const decoded = await offlineCtx.decodeAudioData(arrayBuffer);
-    const offsetSec = trimStartMs / 1000;
-    const durationSec = Math.min(sceneDurationMs / 1000, Math.max(0, decoded.duration - offsetSec));
-    if (durationSec <= 0) return false;
-    const source = offlineCtx.createBufferSource();
-    source.buffer = decoded;
-    const gain = offlineCtx.createGain();
-    gain.gain.value = volume;
-    source.connect(gain).connect(offlineCtx.destination);
-    source.start(sceneStartMs / 1000, offsetSec, durationSec);
-    return true;
+    return scheduleDecodedBuffer(offlineCtx, decoded, trimStartMs, volume, sceneStartMs, sceneDurationMs);
+  } catch (err) {
+    console.warn(
+      '標準のdecodeAudioDataに失敗したため、mediabunny経由でのデコードにフォールバックします(iPhoneカメラ動画のApple空間音声トラック等が原因の可能性):',
+      mediaId,
+      err,
+    );
+  }
+
+  try {
+    return await scheduleAudioSourceViaMediabunny(offlineCtx, blob, trimStartMs, volume, sceneStartMs, sceneDurationMs);
   } catch (err) {
     // 音声デコードに失敗した場合はそのレイヤーを無音として扱う(書き出し自体は止めない)。
     // 原因(コーデック非対応等)を追えるよう詳細はコンソールに残しておく。
