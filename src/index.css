@@ -2069,3 +2069,133 @@ button.editor__menubar-item[aria-expanded='true'] {
   right: 0;
 }
 
+/* デバッグログ(devtools/Web Inspectorが使えない環境向けの簡易ログ表示)。
+   常に最前面・画面右下に小さく浮かせておく。 */
+.debug-log__fab {
+  position: fixed;
+  right: 14px;
+  bottom: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  z-index: 200;
+  opacity: 0.55;
+}
+
+.debug-log__fab:hover,
+.debug-log__fab:focus-visible {
+  opacity: 1;
+}
+
+.debug-log__badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #d93025;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+
+.debug-log__panel {
+  position: fixed;
+  right: 14px;
+  bottom: 58px;
+  left: 14px;
+  top: 14px;
+  max-width: 480px;
+  margin-left: auto;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
+  z-index: 201;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.debug-log__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+}
+
+.debug-log__header h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.debug-log__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.debug-log__empty {
+  color: var(--text);
+  font-size: 12px;
+  text-align: center;
+  padding: 24px 0;
+}
+
+.debug-log__entry {
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: var(--bg-app);
+  border-left: 3px solid var(--border);
+}
+
+.debug-log__entry--error {
+  border-left-color: #d93025;
+}
+
+.debug-log__entry--warn {
+  border-left-color: #f9a825;
+}
+
+.debug-log__entry-meta {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+  color: var(--text);
+  margin-bottom: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.debug-log__entry-message {
+  margin: 0;
+  font-family: Consolas, monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-h);
+}
+
+.debug-log__actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  flex: none;
+}
+

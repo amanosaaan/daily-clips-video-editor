@@ -14,6 +14,7 @@ import {
   AudioLines,
   Bold,
   BringToFront,
+  Bug,
   Calendar,
   Captions,
   ChevronDown,
@@ -129,3 +130,4 @@ export const AudioIcon = icon(AudioLines);
 export const CalendarIcon = icon(Calendar);
 export const MosaicIcon = icon(Grid3x3);
 export const ChaptersIcon = icon(ListVideo);
+export const BugIcon = icon(Bug);
