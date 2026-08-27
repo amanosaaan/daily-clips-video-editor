@@ -10,6 +10,7 @@ import {
 import { getSceneStartMs } from '../domain/timeline';
 import type { ImageLayer, VideoLayer } from '../domain/types';
 import { exportProjectToMp4, type ExportQuality } from '../export/exportPipeline';
+import { shareOrDownloadVideo } from '../utils/exportShare';
 import { useProjectPlaybackEngine } from '../rendering/useProjectPlaybackEngine';
 import { addMediaFile } from '../storage/mediaRepository';
 import { useProjectStore } from '../state/projectStore';
@@ -125,12 +126,7 @@ export function MobileEditorView() {
     setExportProgress(0);
     try {
       const blob = await exportProjectToMp4(project, { onProgress: setExportProgress, quality: exportQuality });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${project.name || 'video'}.mp4`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await shareOrDownloadVideo(blob, `${project.name || 'video'}.mp4`);
     } catch (err) {
       console.error(err);
       window.alert('書き出しに失敗しました。ブラウザがMP4書き出しに対応していない可能性があります。');
