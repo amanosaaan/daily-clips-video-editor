@@ -365,17 +365,20 @@ export function useProjectPlaybackEngine(
     [project],
   );
 
-  // ウィンドウの初回読み込みはrAFループ内のシーン切り替え検知に任せず、ここで明示的に
-  // トリガーしておく。rAFはタブが表示されていない/バックグラウンドタブとして開かれた
-  // 直後などに発火が遅れる・止まることがあり、それに頼ると動画の読み込み自体が
-  // 一切始まらない(プレビューが永久に真っ黒のまま)状態になりかねないため。
+  // ウィンドウの読み込みはrAFループ内のシーン切り替え検知だけに任せず、currentTimeMsDisplay
+  // (seek()呼び出しのたびに同期的に更新される)の変化に反応してここで確実にトリガーする。
+  // rAFはタブが表示されていない/バックグラウンドタブとして開かれた直後などに発火が
+  // 遅れる・止まることがあり、それだけに頼ると「シークバーで別のシーンへ移動しても
+  // その動画が読み込まれず、真っ黒のまま再生できない」状態になりかねないため
+  // (実際にユーザーから報告された不具合)。
   useEffect(() => {
     if (!project) return;
-    const initialSceneIndex = resolvePosition(project, timeRef.current)?.sceneIndex ?? 0;
-    loadedWindowSceneIndexRef.current = initialSceneIndex;
-    void syncAssetWindow(initialSceneIndex);
+    const sceneIndex = resolvePosition(project, currentTimeMsDisplay)?.sceneIndex ?? 0;
+    if (loadedWindowSceneIndexRef.current === sceneIndex) return;
+    loadedWindowSceneIndexRef.current = sceneIndex;
+    void syncAssetWindow(sceneIndex);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, syncAssetWindow]);
+  }, [project, currentTimeMsDisplay, syncAssetWindow]);
 
   useEffect(() => {
     function loop(ts: number) {
