@@ -163,6 +163,13 @@ async function generateVideoThumbnail(mediaId: string, url: string, width: numbe
         };
         video.onerror = () => reject(new Error('サムネイル用の動画読み込みに失敗しました'));
         video.src = url;
+        // iOS/WebKitはpreload属性(auto/metadata)を額面通り尊重せず、実際のデータ取得/
+        // デコードを開始しないことがある(通信量節約のための挙動と見られる)。
+        // loadedmetadataは発火するのにloadeddataだけ永久に来ない、という実機ログの
+        // パターンはこれと一致する。ミュート済みのvideo要素へのplay()呼び出しは
+        // ユーザー操作無しでも許可されるため、これを「本当に読み込め」という明示的な
+        // 合図として使い、実際のデコードを開始させる。
+        video.play().catch(() => {});
       }),
       METADATA_TIMEOUT_MS,
       'サムネイル生成がタイムアウトしました',

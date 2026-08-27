@@ -247,12 +247,18 @@ export function useProjectPlaybackEngine(
               const video = document.createElement('video');
               video.playsInline = true;
               video.preload = 'auto';
+              // iOS/WebKitはpreload="auto"を額面通り尊重せず、実際のデータ取得/デコードを
+              // 開始しないことがある。ミュート状態でのplay()呼び出しはユーザー操作無しでも
+              // 許可されるため、これを「本当に読み込め」という明示的な合図として使う
+              // (実際の音量/ミュート状態は再生開始時にel.mutedへ改めて設定し直される)。
+              video.muted = true;
               hiddenContainerRef.current?.appendChild(video);
               video.src = url;
               const mediaId = layer.mediaId;
               const outcome = await raceTimeout(
                 new Promise<void>((resolve) => {
                   video.onloadeddata = () => {
+                    video.pause();
                     clearMediaLoadError(mediaId);
                     resolve();
                   };
@@ -262,6 +268,7 @@ export function useProjectPlaybackEngine(
                     reportMediaLoadError(mediaId, url, video.error);
                     resolve();
                   };
+                  video.play().catch(() => {});
                 }),
                 MEDIA_LOAD_TIMEOUT_MS,
               );
@@ -298,12 +305,16 @@ export function useProjectPlaybackEngine(
             if (!url || cancelled) continue;
             const audio = document.createElement('audio');
             audio.preload = 'auto';
+            // 動画と同じ理由(iOS/WebKitがpreload="auto"を尊重しないことがある)で、
+            // ミュートしたplay()で実際の読み込みを明示的に促す。
+            audio.muted = true;
             hiddenContainerRef.current?.appendChild(audio);
             audio.src = url;
             const mediaId = layer.mediaId;
             const outcome = await raceTimeout(
               new Promise<void>((resolve) => {
                 audio.onloadeddata = () => {
+                  audio.pause();
                   clearMediaLoadError(mediaId);
                   resolve();
                 };
@@ -311,6 +322,7 @@ export function useProjectPlaybackEngine(
                   reportMediaLoadError(mediaId, url, audio.error);
                   resolve();
                 };
+                audio.play().catch(() => {});
               }),
               MEDIA_LOAD_TIMEOUT_MS,
             );

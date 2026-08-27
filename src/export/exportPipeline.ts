@@ -101,8 +101,20 @@ async function loadVideoElement(url: string): Promise<HTMLVideoElement> {
   getHiddenExportContainer().appendChild(video);
   video.src = url;
   await new Promise<void>((resolve, reject) => {
-    video.onloadeddata = () => resolve();
-    video.onerror = () => reject(new Error('動画の読み込みに失敗しました'));
+    const timer = window.setTimeout(() => reject(new Error('動画の読み込みがタイムアウトしました')), 30000);
+    video.onloadeddata = () => {
+      window.clearTimeout(timer);
+      video.pause();
+      resolve();
+    };
+    video.onerror = () => {
+      window.clearTimeout(timer);
+      reject(new Error('動画の読み込みに失敗しました'));
+    };
+    // iOS/WebKitはpreload="auto"を額面通り尊重せず、実際のデータ取得/デコードを
+    // 開始しないことがある。ミュートしたplay()で明示的に読み込みを促す
+    // (mediaRepository.ts/useProjectPlaybackEngine.tsと同じ対策)。
+    video.play().catch(() => {});
   });
   return video;
 }
