@@ -12,6 +12,16 @@ interface Props {
   onQuickInsertImage: () => void;
 }
 
+function shotDateInputValue(iso: string | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 function layerLabel(layer: Layer): string {
   switch (layer.type) {
     case 'text':
@@ -33,14 +43,26 @@ export function Inspector({ scene, onOpenMedia, onAddCaption, onQuickInsertImage
   const updateLayer = useProjectStore((s) => s.updateLayer);
   const addLayerToScene = useProjectStore((s) => s.addLayerToScene);
   const updateSceneDuration = useProjectStore((s) => s.updateSceneDuration);
+  const updateScene = useProjectStore((s) => s.updateScene);
 
   const sortedLayers = [...scene.layers].sort((a, b) => b.zIndex - a.zIndex);
+  const hasVideo = scene.layers.some((l) => l.type === 'video');
 
   function moveLayer(target: Layer, direction: 'front' | 'back') {
     const result = stepZIndexPatches(scene.layers, target, direction === 'front' ? 'forward' : 'backward');
     if (!result) return;
     updateLayer(scene.id, target.id, result.targetPatch);
     updateLayer(scene.id, result.neighborId, result.neighborPatch);
+  }
+
+  function handleShotDateChange(value: string) {
+    if (!value) return;
+    const [y, m, d] = value.split('-').map(Number);
+    // 時刻部分は元の値があれば維持する(同日内の並び順をなるべく変えないため)
+    const prev = scene.shotDate ? new Date(scene.shotDate) : null;
+    const hasPrevTime = prev && !Number.isNaN(prev.getTime());
+    const next = new Date(y, m - 1, d, hasPrevTime ? prev.getHours() : 0, hasPrevTime ? prev.getMinutes() : 0, hasPrevTime ? prev.getSeconds() : 0);
+    updateScene(scene.id, { shotDate: next.toISOString() });
   }
 
   return (
@@ -56,6 +78,16 @@ export function Inspector({ scene, onOpenMedia, onAddCaption, onQuickInsertImage
             onChange={(v) => updateSceneDuration(scene.id, Math.max(500, v * 1000))}
           />
         </label>
+        {(hasVideo || scene.shotDate) && (
+          <label>
+            撮影日(並び替え・日付焼き込みに使用)
+            <input
+              type="date"
+              value={shotDateInputValue(scene.shotDate)}
+              onChange={(e) => handleShotDateChange(e.target.value)}
+            />
+          </label>
+        )}
       </div>
 
       <div className="inspector__section">

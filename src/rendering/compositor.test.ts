@@ -9,6 +9,7 @@ function createFakeCtx() {
   const scaleLog: [number, number][] = [];
   const fillRectAlphaLog: number[] = [];
   const fillTextAlphaLog: { text: string; alpha: number }[] = [];
+  const drawImageArgsLog: unknown[][] = [];
 
   let globalAlphaValue = 1;
   const alphaStack: number[] = [];
@@ -18,6 +19,8 @@ function createFakeCtx() {
     strokeStyle: '',
     font: '',
     filter: 'none',
+    lineWidth: 1,
+    lineJoin: 'miter' as CanvasLineJoin,
     textAlign: 'left' as CanvasTextAlign,
     textBaseline: 'top' as CanvasTextBaseline,
     get globalAlpha() {
@@ -55,7 +58,11 @@ function createFakeCtx() {
       calls.push(`fillText:${text}`);
       fillTextAlphaLog.push({ text, alpha: globalAlphaValue });
     },
-    drawImage: () => calls.push('drawImage'),
+    strokeText: (text: string) => calls.push(`strokeText:${text}`),
+    drawImage: (...args: unknown[]) => {
+      calls.push('drawImage');
+      drawImageArgsLog.push(args);
+    },
     beginPath: () => calls.push('beginPath'),
     ellipse: () => calls.push('ellipse'),
     fill: () => calls.push('fill'),
@@ -65,7 +72,16 @@ function createFakeCtx() {
     clip: () => calls.push('clip'),
     rect: () => calls.push('rect'),
   };
-  return { ctx: ctx as unknown as CanvasRenderingContext2D, calls, translateLog, rotateLog, scaleLog, fillRectAlphaLog, fillTextAlphaLog };
+  return {
+    ctx: ctx as unknown as CanvasRenderingContext2D,
+    calls,
+    translateLog,
+    rotateLog,
+    scaleLog,
+    fillRectAlphaLog,
+    fillTextAlphaLog,
+    drawImageArgsLog,
+  };
 }
 
 const baseLayer = {
@@ -249,6 +265,111 @@ describe('drawLayer photo filter', () => {
     drawSceneFrame(ctx, scene, 640, 360, assets);
 
     expect((ctx as unknown as { filter: string }).filter).toBe('none');
+  });
+});
+
+describe('drawLayer video crop', () => {
+  function makeVideoEl(videoWidth: number, videoHeight: number): HTMLVideoElement {
+    const el = document.createElement('video');
+    Object.defineProperty(el, 'videoWidth', { value: videoWidth, configurable: true });
+    Object.defineProperty(el, 'videoHeight', { value: videoHeight, configurable: true });
+    return el;
+  }
+
+  it('draws with a source rect derived from crop (fractions of videoWidth/videoHeight)', () => {
+    const video: VideoLayer = {
+      ...baseLayer,
+      id: 'video',
+      type: 'video',
+      mediaId: 'media-1',
+      trimStart: 0,
+      volume: 1,
+      muted: false,
+      zIndex: 0,
+      x: 10,
+      y: 20,
+      width: 300,
+      height: 150,
+      crop: { x: 0.25, y: 0.1, width: 0.5, height: 0.8 },
+    };
+    const scene: Scene = { id: 'scene', duration: 1000, layers: [video] };
+    const { ctx, drawImageArgsLog } = createFakeCtx();
+    const el = makeVideoEl(1920, 1080);
+    const assets = new Map([['media-1', el]]);
+
+    drawSceneFrame(ctx, scene, 640, 360, assets);
+
+    expect(drawImageArgsLog).toHaveLength(1);
+    const [elArg, sx, sy, sWidth, sHeight, dx, dy, dWidth, dHeight] = drawImageArgsLog[0];
+    expect(elArg).toBe(el);
+    expect(sx).toBeCloseTo(0.25 * 1920, 5);
+    expect(sy).toBeCloseTo(0.1 * 1080, 5);
+    expect(sWidth).toBeCloseTo(0.5 * 1920, 5);
+    expect(sHeight).toBeCloseTo(0.8 * 1080, 5);
+    expect(dx).toBe(10);
+    expect(dy).toBe(20);
+    expect(dWidth).toBe(300);
+    expect(dHeight).toBe(150);
+  });
+
+  it('draws the full frame (4-arg drawImage) when no crop is set', () => {
+    const video: VideoLayer = {
+      ...baseLayer,
+      id: 'video',
+      type: 'video',
+      mediaId: 'media-1',
+      trimStart: 0,
+      volume: 1,
+      muted: false,
+      zIndex: 0,
+    };
+    const scene: Scene = { id: 'scene', duration: 1000, layers: [video] };
+    const { ctx, drawImageArgsLog } = createFakeCtx();
+    const assets = new Map([['media-1', makeVideoEl(1920, 1080)]]);
+
+    drawSceneFrame(ctx, scene, 640, 360, assets);
+
+    expect(drawImageArgsLog).toHaveLength(1);
+    expect(drawImageArgsLog[0]).toHaveLength(5); // el, x, y, width, height
+  });
+});
+
+describe('date burn-in', () => {
+  it('draws the shot date near the bottom-right when enabled and shotDate is set', () => {
+    const scene: Scene = { id: 'scene', duration: 1000, layers: [], shotDate: '2025-03-14T06:57:59.000Z' };
+    const { ctx, calls } = createFakeCtx();
+
+    drawSceneFrame(ctx, scene, 640, 360, new Map(), 0, undefined, { enabled: true, position: 'right' });
+
+    expect(calls).toContain('fillText:2025/03/14');
+    expect(calls).toContain('strokeText:2025/03/14');
+  });
+
+  it('does not draw anything when disabled', () => {
+    const scene: Scene = { id: 'scene', duration: 1000, layers: [], shotDate: '2025-03-14T06:57:59.000Z' };
+    const { ctx, calls } = createFakeCtx();
+
+    drawSceneFrame(ctx, scene, 640, 360, new Map(), 0, undefined, { enabled: false, position: 'right' });
+
+    expect(calls.some((c) => c.startsWith('fillText:2025'))).toBe(false);
+  });
+
+  it('does not draw anything when the scene has no shotDate', () => {
+    const scene: Scene = { id: 'scene', duration: 1000, layers: [] };
+    const { ctx, calls } = createFakeCtx();
+
+    drawSceneFrame(ctx, scene, 640, 360, new Map(), 0, undefined, { enabled: true, position: 'right' });
+
+    expect(calls.some((c) => c.startsWith('fillText:') || c.startsWith('strokeText:'))).toBe(false);
+  });
+
+  it('is unaffected by an omitted dateBurnIn option (defaults to off)', () => {
+    const scene: Scene = { id: 'scene', duration: 1000, layers: [], shotDate: '2025-03-14T06:57:59.000Z' };
+    const { ctx, calls } = createFakeCtx();
+
+    drawSceneFrame(ctx, scene, 640, 360, new Map());
+
+    expect(calls.some((c) => c.startsWith('fillText:') || c.startsWith('strokeText:'))).toBe(false);
   });
 });
 

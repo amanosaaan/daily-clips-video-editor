@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid';
 import { db } from './db';
 import type { MediaAsset } from '../domain/types';
+import { readMp4CreationTime } from '../domain/videoMetadata';
 
 const mediaUrlCache = new Map<string, string>();
 const thumbnailUrlCache = new Map<string, string>();
@@ -110,6 +111,8 @@ export async function addMediaBlob(
   let width: number | undefined;
   let height: number | undefined;
   let thumbnailBlobId: string | undefined;
+  let shotDatetime: string | undefined;
+  let shotDateSource: 'metadata' | 'mtime' | undefined;
 
   if (kind === 'video') {
     const meta = await readVideoMetadata(url);
@@ -117,6 +120,18 @@ export async function addMediaBlob(
     width = meta.width;
     height = meta.height;
     thumbnailBlobId = await generateVideoThumbnail(id, url, width, height);
+
+    // 撮影日時: MP4のメタデータ(moov/mvhdのcreation_time)から取得できなければ、
+    // ファイルの更新日時にフォールバックする(取得できない場合は現在時刻)。
+    const fromMetadata = await readMp4CreationTime(blob);
+    if (fromMetadata) {
+      shotDatetime = fromMetadata.toISOString();
+      shotDateSource = 'metadata';
+    } else {
+      const mtimeMs = blob instanceof File ? blob.lastModified : Date.now();
+      shotDatetime = new Date(mtimeMs).toISOString();
+      shotDateSource = 'mtime';
+    }
   } else if (kind === 'image') {
     const meta = await readImageMetadata(url);
     width = meta.width;
@@ -137,6 +152,8 @@ export async function addMediaBlob(
     createdAt: Date.now(),
     sizeBytes: blob.size,
     thumbnailBlobId,
+    shotDatetime,
+    shotDateSource,
   };
 }
 

@@ -33,6 +33,7 @@ interface EditorState {
 
   renameProject: (name: string) => void;
   setAspectRatio: (ratio: AspectRatio) => void;
+  setBurnDateSettings: (patch: Partial<Pick<Project, 'burnDateEnabled' | 'burnDatePosition'>>) => void;
 
   undo: () => void;
   redo: () => void;
@@ -221,6 +222,12 @@ export const useProjectStore = create<EditorState>((set, get) => {
         resolution: ASPECT_RATIO_RESOLUTIONS[aspectRatio],
         ...touch(),
       });
+    },
+
+    setBurnDateSettings: (patch) => {
+      const state = get();
+      if (!state.project) return;
+      commit({ ...state.project, ...patch, ...touch() });
     },
 
     undo: () =>

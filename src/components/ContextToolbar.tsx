@@ -1,5 +1,6 @@
 import { alignPatches, bringToFrontPatches, rotatePatches, sendToBackPatches, type LayerPatch } from '../domain/arrange';
 import type { AudioLayer, Layer, Project, Scene } from '../domain/types';
+import { reorientVideoPatch } from '../domain/videoOrientation';
 import { useProjectStore } from '../state/projectStore';
 import {
   AlignBottomIcon,
@@ -397,6 +398,27 @@ export function ContextToolbar({ project, scene, layers, onOpenCrop }: Props) {
           >
             {layer.muted ? <MuteOnIcon size={16} /> : <MuteOffIcon size={16} />}
           </button>
+        </div>
+        <div className="context-toolbar__group">
+          <button className="btn-pill" onClick={() => onOpenCrop(layer.id)}>
+            <CropIcon size={16} /> トリミング(ズーム/位置)
+          </button>
+          <div className="context-toolbar__icon-row">
+            <button
+              className="context-toolbar__icon-btn"
+              title="動画の向きを反時計回りに90度直す"
+              onClick={() => updateLayer(sceneId, layer.id, reorientVideoPatch(layer, asset, -90))}
+            >
+              <RotateLeftIcon />
+            </button>
+            <button
+              className="context-toolbar__icon-btn"
+              title="動画の向きを時計回りに90度直す"
+              onClick={() => updateLayer(sceneId, layer.id, reorientVideoPatch(layer, asset, 90))}
+            >
+              <RotateRightIcon />
+            </button>
+          </div>
         </div>
         <PhotoFilterControl filter={layer.filter} onChange={(f) => updateLayer(sceneId, layer.id, { filter: f })} />
         <AnimationControl animation={layer.animation} onChange={(a) => updateLayer(sceneId, layer.id, { animation: a })} />

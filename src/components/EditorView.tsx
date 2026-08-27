@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createCaptionLayer, createImageLayerForScene, createTextLayer, cropPatch } from '../domain/layerFactory';
 import { getSceneStartMs } from '../domain/timeline';
-import type { ImageLayer } from '../domain/types';
+import type { ImageLayer, VideoLayer } from '../domain/types';
 import { exportProjectToMp4, type ExportQuality } from '../export/exportPipeline';
 import { useProjectPlaybackEngine } from '../rendering/useProjectPlaybackEngine';
 import { addMediaFile } from '../storage/mediaRepository';
@@ -27,6 +27,7 @@ export function EditorView() {
   const addLayerToScene = useProjectStore((s) => s.addLayerToScene);
   const addMediaAsset = useProjectStore((s) => s.addMediaAsset);
   const updateLayer = useProjectStore((s) => s.updateLayer);
+  const setBurnDateSettings = useProjectStore((s) => s.setBurnDateSettings);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [exportQuality, setExportQuality] = useState<ExportQuality>('high');
@@ -58,12 +59,16 @@ export function EditorView() {
   const currentScene = engine.position?.scene ?? project.scenes[0];
   const selectedLayers = currentScene.layers.filter((l) => selectedLayerIds.includes(l.id));
   const croppingLayer = currentScene.layers.find(
-    (l): l is ImageLayer => l.id === croppingImageLayerId && l.type === 'image',
+    (l): l is ImageLayer | VideoLayer => l.id === croppingImageLayerId && (l.type === 'image' || l.type === 'video'),
   );
 
   async function handleQuickInsertImages(files: FileList | null) {
     if (!files || !project) return;
     for (const file of Array.from(files)) {
+      // このinputはaccept="image/*"だが、それはブラウザのファイル選択ダイアログ側の
+      // フィルタでしかないため、ドラッグ&ドロップ等で画像以外が来た場合に備えて
+      // 念のためファイルの種類も確認する(動画等を誤って画像レイヤーにしない)。
+      if (!file.type.startsWith('image/')) continue;
       try {
         const asset = await addMediaFile(project.id, file);
         addMediaAsset(asset);
@@ -121,6 +126,30 @@ export function EditorView() {
         <button className="btn-pill" onClick={() => void handleExportProjectFile()}>
           プロジェクトを書き出す
         </button>
+        <label className="context-toolbar__checkbox">
+          <input
+            type="checkbox"
+            checked={project.burnDateEnabled}
+            onChange={(e) => setBurnDateSettings({ burnDateEnabled: e.target.checked })}
+          />
+          撮影日を焼き込む
+        </label>
+        {project.burnDateEnabled && (
+          <div className="context-toolbar__segmented">
+            <button
+              className={project.burnDatePosition === 'left' ? 'is-active' : ''}
+              onClick={() => setBurnDateSettings({ burnDatePosition: 'left' })}
+            >
+              左下
+            </button>
+            <button
+              className={project.burnDatePosition === 'right' ? 'is-active' : ''}
+              onClick={() => setBurnDateSettings({ burnDatePosition: 'right' })}
+            >
+              右下
+            </button>
+          </div>
+        )}
         <select
           className="editor__quality-select"
           value={exportQuality}

@@ -7,7 +7,7 @@ import {
   cropPatch,
 } from '../domain/layerFactory';
 import { getSceneStartMs } from '../domain/timeline';
-import type { ImageLayer } from '../domain/types';
+import type { ImageLayer, VideoLayer } from '../domain/types';
 import { exportProjectToMp4, type ExportQuality } from '../export/exportPipeline';
 import { useProjectPlaybackEngine } from '../rendering/useProjectPlaybackEngine';
 import { addMediaFile } from '../storage/mediaRepository';
@@ -113,7 +113,7 @@ export function MobileEditorView() {
   const currentScene = engine.position?.scene ?? project.scenes[0];
   const selectedLayers = currentScene.layers.filter((l) => selectedLayerIds.includes(l.id));
   const croppingLayer = currentScene.layers.find(
-    (l): l is ImageLayer => l.id === croppingImageLayerId && l.type === 'image',
+    (l): l is ImageLayer | VideoLayer => l.id === croppingImageLayerId && (l.type === 'image' || l.type === 'video'),
   );
 
   async function handleExport() {
@@ -139,6 +139,7 @@ export function MobileEditorView() {
   async function handleQuickInsertImages(files: FileList | null) {
     if (!files || !project) return;
     for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue;
       try {
         const asset = await addMediaFile(project.id, file);
         addMediaAsset(asset);

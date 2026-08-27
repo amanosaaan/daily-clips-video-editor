@@ -25,6 +25,8 @@ function project(scenes: Scene[]): Project {
     fps: 30,
     scenes,
     mediaLibrary: [],
+    burnDateEnabled: false,
+    burnDatePosition: 'right',
   };
 }
 

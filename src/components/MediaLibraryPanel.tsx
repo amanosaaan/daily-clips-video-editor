@@ -17,6 +17,7 @@ export function MediaLibraryPanel({ project, scene, onClose }: Props) {
   const removeMediaAsset = useProjectStore((s) => s.removeMediaAsset);
   const addLayerToScene = useProjectStore((s) => s.addLayerToScene);
   const updateSceneDuration = useProjectStore((s) => s.updateSceneDuration);
+  const updateScene = useProjectStore((s) => s.updateScene);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
   const [thumbUrls, setThumbUrls] = useState<Record<string, string>>({});
@@ -67,6 +68,9 @@ export function MediaLibraryPanel({ project, scene, onClose }: Props) {
       addLayerToScene(scene.id, layer);
       // Google Vids と同様、シーンの主役となる動画を取り込んだ場合はシーンの長さを合わせる。
       if (isMain && asset.durationMs) updateSceneDuration(scene.id, asset.durationMs);
+      // 撮影日順の並び替え・日付焼き込み・チャプター生成に使うため、主役の動画の
+      // 撮影日時をシーンにもコピーしておく。
+      if (isMain && asset.shotDatetime) updateScene(scene.id, { shotDate: asset.shotDatetime });
     } else if (asset.kind === 'image') {
       addLayerToScene(scene.id, createImageLayerForScene(project, scene, asset));
     } else {

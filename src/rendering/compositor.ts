@@ -4,6 +4,11 @@ import type { AnimationConfig, Layer, Scene, TransitionConfig } from '../domain/
 export type ResolvedAssetMap = Map<string, HTMLVideoElement | HTMLImageElement>;
 type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
+export interface DateBurnInOptions {
+  enabled: boolean;
+  position: 'left' | 'right';
+}
+
 export function drawSceneFrame(
   ctx: Ctx2D,
   scene: Scene,
@@ -12,6 +17,7 @@ export function drawSceneFrame(
   resolvedAssets: ResolvedAssetMap,
   sceneTimeMs = 0,
   hiddenLayerId?: string | null,
+  dateBurnIn?: DateBurnInOptions,
 ): void {
   ctx.save();
   ctx.fillStyle = scene.backgroundColor ?? '#000000';
@@ -23,6 +29,37 @@ export function drawSceneFrame(
     if (!isLayerVisibleAt(layer, sceneTimeMs, scene.duration)) continue;
     drawLayer(ctx, layer, resolvedAssets, sceneTimeMs);
   }
+
+  // 撮影日の焼き込みは実レイヤーではなく、常に最前面・指定した角に固定表示する
+  // 別枠の描画として扱う(ズーム/パン/クロップなど他のレイヤー操作の影響を受けない)。
+  if (dateBurnIn?.enabled && scene.shotDate) {
+    drawDateBadge(ctx, scene.shotDate, dateBurnIn.position, canvasWidth, canvasHeight);
+  }
+  ctx.restore();
+}
+
+function formatShotDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function drawDateBadge(ctx: Ctx2D, shotDateIso: string, position: 'left' | 'right', canvasWidth: number, canvasHeight: number): void {
+  const text = formatShotDate(shotDateIso);
+  const fontSize = Math.round(canvasHeight * 0.035);
+  const margin = Math.round(canvasHeight * 0.02);
+  ctx.save();
+  ctx.font = `bold ${fontSize}px sans-serif`;
+  ctx.textBaseline = 'bottom';
+  ctx.textAlign = position === 'right' ? 'right' : 'left';
+  const x = position === 'right' ? canvasWidth - margin : margin;
+  const y = canvasHeight - margin;
+  ctx.lineJoin = 'round';
+  ctx.lineWidth = Math.max(2, fontSize * 0.12);
+  ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(text, x, y);
   ctx.restore();
 }
 
@@ -41,36 +78,37 @@ export function drawTransitionFrame(
   canvasHeight: number,
   resolvedAssets: ResolvedAssetMap,
   fromSceneTimeMs: number,
+  dateBurnIn?: DateBurnInOptions,
 ): void {
   const p = Math.min(1, Math.max(0, progress));
 
   switch (transition.type) {
     case 'crossfade': {
-      drawSceneFrame(ctx, fromScene, canvasWidth, canvasHeight, resolvedAssets, fromSceneTimeMs);
+      drawSceneFrame(ctx, fromScene, canvasWidth, canvasHeight, resolvedAssets, fromSceneTimeMs, undefined, dateBurnIn);
       ctx.save();
       ctx.globalAlpha = p;
-      drawSceneFrame(ctx, toScene, canvasWidth, canvasHeight, resolvedAssets, 0);
+      drawSceneFrame(ctx, toScene, canvasWidth, canvasHeight, resolvedAssets, 0, undefined, dateBurnIn);
       ctx.restore();
       break;
     }
     case 'slide': {
       ctx.save();
       ctx.translate(-p * canvasWidth, 0);
-      drawSceneFrame(ctx, fromScene, canvasWidth, canvasHeight, resolvedAssets, fromSceneTimeMs);
+      drawSceneFrame(ctx, fromScene, canvasWidth, canvasHeight, resolvedAssets, fromSceneTimeMs, undefined, dateBurnIn);
       ctx.restore();
       ctx.save();
       ctx.translate(canvasWidth - p * canvasWidth, 0);
-      drawSceneFrame(ctx, toScene, canvasWidth, canvasHeight, resolvedAssets, 0);
+      drawSceneFrame(ctx, toScene, canvasWidth, canvasHeight, resolvedAssets, 0, undefined, dateBurnIn);
       ctx.restore();
       break;
     }
     case 'wipe': {
-      drawSceneFrame(ctx, fromScene, canvasWidth, canvasHeight, resolvedAssets, fromSceneTimeMs);
+      drawSceneFrame(ctx, fromScene, canvasWidth, canvasHeight, resolvedAssets, fromSceneTimeMs, undefined, dateBurnIn);
       ctx.save();
       ctx.beginPath();
       ctx.rect(0, 0, p * canvasWidth, canvasHeight);
       ctx.clip();
-      drawSceneFrame(ctx, toScene, canvasWidth, canvasHeight, resolvedAssets, 0);
+      drawSceneFrame(ctx, toScene, canvasWidth, canvasHeight, resolvedAssets, 0, undefined, dateBurnIn);
       ctx.restore();
       break;
     }
@@ -183,6 +221,12 @@ function drawLayer(ctx: Ctx2D, layer: Layer, assets: ResolvedAssetMap, sceneTime
           const sy = layer.crop.y * el.naturalHeight;
           const sWidth = layer.crop.width * el.naturalWidth;
           const sHeight = layer.crop.height * el.naturalHeight;
+          ctx.drawImage(el, sx, sy, sWidth, sHeight, layer.x, layer.y, layer.width, layer.height);
+        } else if (layer.type === 'video' && layer.crop && el instanceof HTMLVideoElement) {
+          const sx = layer.crop.x * el.videoWidth;
+          const sy = layer.crop.y * el.videoHeight;
+          const sWidth = layer.crop.width * el.videoWidth;
+          const sHeight = layer.crop.height * el.videoHeight;
           ctx.drawImage(el, sx, sy, sWidth, sHeight, layer.x, layer.y, layer.width, layer.height);
         } else {
           ctx.drawImage(el, layer.x, layer.y, layer.width, layer.height);

@@ -189,9 +189,15 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
           }
         }
         const progress = 1 - remainingInSceneMs / transition.durationMs;
-        drawTransitionFrame(ctx, scene, nextScene, progress, transition, width, height, assets, localTimeMs);
+        drawTransitionFrame(ctx, scene, nextScene, progress, transition, width, height, assets, localTimeMs, {
+          enabled: project.burnDateEnabled,
+          position: project.burnDatePosition,
+        });
       } else {
-        drawSceneFrame(ctx, scene, width, height, assets, localTimeMs);
+        drawSceneFrame(ctx, scene, width, height, assets, localTimeMs, undefined, {
+          enabled: project.burnDateEnabled,
+          position: project.burnDatePosition,
+        });
       }
 
       const timestampSec = elapsedMs / 1000 + localTimeMs / 1000;

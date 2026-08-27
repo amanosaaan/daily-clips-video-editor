@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ImageLayer } from '../domain/types';
+import type { ImageLayer, VideoLayer } from '../domain/types';
 import { getMediaObjectUrl } from '../storage/mediaRepository';
 import { CloseIcon } from './icons';
 
 interface Props {
-  layer: ImageLayer;
+  layer: ImageLayer | VideoLayer;
   onConfirm: (crop: { x: number; y: number; width: number; height: number }) => void;
   onCancel: () => void;
 }
@@ -57,15 +57,36 @@ export function ImageCropModal({ layer, onConfirm, onCancel }: Props) {
     };
   }, [layer.mediaId]);
 
-  function handleImageLoad(e: React.SyntheticEvent<HTMLImageElement>) {
-    const naturalW = e.currentTarget.naturalWidth;
-    const naturalH = e.currentTarget.naturalHeight;
+  function applyNaturalSize(naturalW: number, naturalH: number) {
+    if (!naturalW || !naturalH) return;
     const scale = Math.min(maxDisplay / naturalW, maxDisplay / naturalH, 1);
     const width = naturalW * scale;
     const height = naturalH * scale;
     setImgSize({ width, height });
     const crop = layer.crop ?? { x: 0, y: 0, width: 1, height: 1 };
     setRect({ x: crop.x * width, y: crop.y * height, width: crop.width * width, height: crop.height * height });
+  }
+
+  function handleImageLoad(e: React.SyntheticEvent<HTMLImageElement>) {
+    applyNaturalSize(e.currentTarget.naturalWidth, e.currentTarget.naturalHeight);
+  }
+
+  function handleVideoLoadedData(e: React.SyntheticEvent<HTMLVideoElement>) {
+    const video = e.currentTarget;
+    // 実際に動画で使っているトリム開始位置のフレームを表示する(先頭が真っ黒/無地な
+    // 動画でも、トリミング対象として分かりやすいフレームになるようにする)。
+    if (layer.type === 'video') {
+      const seekSec = layer.trimStart / 1000;
+      if (Number.isFinite(seekSec) && seekSec > 0 && seekSec < (video.duration || 0)) {
+        video.currentTime = seekSec;
+        return;
+      }
+    }
+    applyNaturalSize(video.videoWidth, video.videoHeight);
+  }
+
+  function handleVideoSeeked(e: React.SyntheticEvent<HTMLVideoElement>) {
+    applyNaturalSize(e.currentTarget.videoWidth, e.currentTarget.videoHeight);
   }
 
   useEffect(() => {
@@ -127,8 +148,19 @@ export function ImageCropModal({ layer, onConfirm, onCancel }: Props) {
         <div className="crop-modal__body">
           {imgUrl && (
             <div className="crop-modal__stage" style={imgSize ? { width: imgSize.width, height: imgSize.height } : undefined}>
-              {/* eslint-disable-next-line jsx-a11y/alt-text */}
-              <img src={imgUrl} onLoad={handleImageLoad} draggable={false} />
+              {layer.type === 'video' ? (
+                <video
+                  src={imgUrl}
+                  muted
+                  playsInline
+                  preload="auto"
+                  onLoadedData={handleVideoLoadedData}
+                  onSeeked={handleVideoSeeked}
+                />
+              ) : (
+                // eslint-disable-next-line jsx-a11y/alt-text
+                <img src={imgUrl} onLoad={handleImageLoad} draggable={false} />
+              )}
               {rect && imgSize && (
                 <>
                   <div className="crop-modal__mask" style={{ clipPath: maskClipPath(rect) }} />

@@ -45,7 +45,7 @@ export function createCaptionLayer(project: Project, scene: Scene): TextLayer {
 }
 
 /** 指定した範囲(bounds)の中に、元の縦横比を保ったまま収まる最大サイズを計算する */
-function containFit(
+export function containFit(
   naturalWidth: number,
   naturalHeight: number,
   bounds: { x: number; y: number; width: number; height: number },
@@ -98,10 +98,10 @@ export function createImageLayerForScene(project: Project, scene: Scene, asset: 
  * よう中心を保ったままレイヤーサイズも合わせて更新する。
  */
 export function cropPatch(
-  layer: ImageLayer,
+  layer: ImageLayer | VideoLayer,
   crop: { x: number; y: number; width: number; height: number },
   asset: MediaAsset | undefined,
-): Partial<ImageLayer> {
+): Partial<ImageLayer | VideoLayer> {
   if (!asset?.width || !asset?.height) return { crop };
   const cx = layer.x + layer.width / 2;
   const cy = layer.y + layer.height / 2;

@@ -1,9 +1,9 @@
 export type AspectRatio = '16:9' | '9:16' | '1:1';
 
 export const ASPECT_RATIO_RESOLUTIONS: Record<AspectRatio, { width: number; height: number }> = {
-  '16:9': { width: 1280, height: 720 },
-  '9:16': { width: 720, height: 1280 },
-  '1:1': { width: 900, height: 900 },
+  '16:9': { width: 1920, height: 1080 },
+  '9:16': { width: 1080, height: 1920 },
+  '1:1': { width: 1080, height: 1080 },
 };
 
 export interface TransitionConfig {
@@ -58,6 +58,12 @@ export interface VideoLayer extends BaseLayer {
   volume: number;
   muted: boolean;
   filter?: PhotoFilter;
+  /**
+   * 元動画に対するトリミング範囲。0〜1の割合で指定（未指定なら動画全体を表示）。
+   * ズーム（拡大）やパン（位置調整）はこのcropの値で表現する
+   * （crop.width/heightを1未満にすれば拡大、crop.x/yで表示位置をずらす）。
+   */
+  crop?: { x: number; y: number; width: number; height: number };
 }
 
 export interface ImageLayer extends BaseLayer {
@@ -111,6 +117,12 @@ export interface Scene {
   layers: Layer[];
   backgroundColor?: string;
   transitionOut?: TransitionConfig;
+  /**
+   * このシーン(≒クリップ)の主役となる動画の撮影日時(ISO 8601)。
+   * 動画を配置した際に、素材(MediaAsset)のshotDatetimeからコピーされる。
+   * クリップの並び替え・撮影日の焼き込み・チャプター生成に使う。
+   */
+  shotDate?: string;
 }
 
 export interface MediaAsset {
@@ -123,6 +135,10 @@ export interface MediaAsset {
   createdAt: number;
   sizeBytes: number;
   thumbnailBlobId?: string;
+  /** 撮影日時(ISO 8601)。動画のメタデータ(creation_time)、
+   *  無ければファイルの更新日時(lastModified)から取得する。 */
+  shotDatetime?: string;
+  shotDateSource?: 'metadata' | 'mtime';
 }
 
 export interface Project {
@@ -135,4 +151,8 @@ export interface Project {
   fps: number;
   scenes: Scene[];
   mediaLibrary: MediaAsset[];
+  /** 撮影日をプレビュー・書き出し双方に焼き込むかどうか */
+  burnDateEnabled: boolean;
+  /** 撮影日を焼き込む位置 */
+  burnDatePosition: 'left' | 'right';
 }

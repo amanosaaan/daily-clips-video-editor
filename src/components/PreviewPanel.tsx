@@ -147,7 +147,7 @@ export function PreviewPanel({ project, canvasRef, engine, onOpenCrop, multiSele
                   onSkewChange={(patch) => scene && updateLayer(scene.id, layer.id, patch)}
                   onDoubleClick={() => {
                     if (layer.type === 'text') startEditing(layer.id);
-                    else if (layer.type === 'image') onOpenCrop(layer.id);
+                    else if (layer.type === 'image' || layer.type === 'video') onOpenCrop(layer.id);
                   }}
                 />
               ))}

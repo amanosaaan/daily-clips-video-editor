@@ -314,6 +314,7 @@ export function useProjectPlaybackEngine(
                 project.resolution.height,
                 assetsRef.current,
                 position.localTimeMs,
+                { enabled: project.burnDateEnabled, position: project.burnDatePosition },
               );
             } else {
               drawSceneFrame(
@@ -324,6 +325,7 @@ export function useProjectPlaybackEngine(
                 assetsRef.current,
                 position.localTimeMs,
                 hiddenLayerIdRef.current,
+                { enabled: project.burnDateEnabled, position: project.burnDatePosition },
               );
             }
           }

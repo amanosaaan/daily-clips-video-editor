@@ -21,6 +21,8 @@ export function createProject(name: string, aspectRatio: AspectRatio = '16:9'): 
       },
     ],
     mediaLibrary: [],
+    burnDateEnabled: true,
+    burnDatePosition: 'right',
   };
 }
 
