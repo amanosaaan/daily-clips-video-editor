@@ -87,6 +87,14 @@ async function readVideoMetadata(url: string): Promise<{ durationMs: number; wid
       '動画メタデータの読み込みがタイムアウトしました',
     );
   } finally {
+    // src解除+load()を呼ばずにDOMから外すだけだと、iOS/WebKitではデコーダーセッションが
+    // 解放されないまま残ることがある。一括取り込みではこの一時的な<video>要素をファイル
+    // ごとに複数回作るため、解放漏れが蓄積して後続ファイルがデコーダーを確保できず
+    // 延々とタイムアウトする不具合の原因になっていた(useProjectPlaybackEngine.ts/
+    // exportPipeline.tsの使い捨て要素の後片付けと同じ手順に揃える)。
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
     video.remove();
   }
 }
@@ -106,6 +114,9 @@ async function readAudioMetadata(url: string): Promise<{ durationMs: number }> {
       '音声メタデータの読み込みがタイムアウトしました',
     );
   } finally {
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
     audio.remove();
   }
 }
@@ -157,6 +168,9 @@ async function generateVideoThumbnail(mediaId: string, url: string, width: numbe
       'サムネイル生成がタイムアウトしました',
     );
   } finally {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
     video.remove();
   }
 }

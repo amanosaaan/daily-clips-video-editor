@@ -267,7 +267,12 @@ export function useProjectPlaybackEngine(
               );
               if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
               if (!cancelled) assetsRef.current.set(mediaId, video);
-              else video.remove();
+              else {
+                video.pause();
+                video.removeAttribute('src');
+                video.load();
+                video.remove();
+              }
             } else {
               const img = new Image();
               img.src = url;
@@ -311,7 +316,12 @@ export function useProjectPlaybackEngine(
             );
             if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
             if (!cancelled) audioAssetsRef.current.set(mediaId, audio);
-            else audio.remove();
+            else {
+              audio.pause();
+              audio.removeAttribute('src');
+              audio.load();
+              audio.remove();
+            }
           }
         }
       }
