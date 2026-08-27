@@ -28,6 +28,7 @@ import {
   FolderOpen,
   Grid3x3,
   Group,
+  ListVideo,
   ImageIcon as LucideImageIcon,
   Italic,
   Layers,
@@ -127,3 +128,4 @@ export const VideoIcon = icon(Video);
 export const AudioIcon = icon(AudioLines);
 export const CalendarIcon = icon(Calendar);
 export const MosaicIcon = icon(Grid3x3);
+export const ChaptersIcon = icon(ListVideo);

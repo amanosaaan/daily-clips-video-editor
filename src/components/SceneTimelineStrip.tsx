@@ -24,7 +24,17 @@ interface Props {
   autoCenter: boolean;
   /** チップ列の表示倍率(1=100%)。省略時は1。本家Google Vidsのズームスライダー用（PC向け）。 */
   zoom?: number;
+  /**
+   * Ctrl+ホイール(トラックパッドの2本指ピンチも、多くのブラウザではctrlKey付きの
+   * wheelイベントとして送られてくる)でのズーム操作を有効にする場合に渡すコールバック。
+   * PC向け(autoCenter=falseのシーク兼用チップ列)専用。呼び出し元でzoom(倍率)状態を
+   * 更新すること。省略時はこの操作自体を無視する(スクロールは従来通り機能する)。
+   */
+  onZoomChange?: (nextZoom: number) => void;
 }
+
+const WHEEL_ZOOM_MIN = 0.5;
+const WHEEL_ZOOM_MAX = 4;
 
 /** シーンのプレビューに使う「主役」の動画/画像レイヤーのmediaIdを返す（無ければnull） */
 function getSceneMainMediaId(scene: Scene): string | null {
@@ -39,7 +49,7 @@ function getSceneMainMediaId(scene: Scene): string | null {
  * 背景に表示）の列を横スクロール表示する。autoCenterに応じて2つの見た目・挙動を切り替える
  * （詳しくはPropsのコメント参照）。PC・スマホ共通で使う。
  */
-export function SceneTimelineStrip({ project, engine, currentSceneId, autoCenter, zoom = 1 }: Props) {
+export function SceneTimelineStrip({ project, engine, currentSceneId, autoCenter, zoom = 1, onZoomChange }: Props) {
   const reorderScenes = useProjectStore((s) => s.reorderScenes);
   const [sceneThumbUrls, setSceneThumbUrls] = useState<Record<string, string>>({});
   const scenesScrollRef = useRef<HTMLDivElement>(null);
@@ -200,6 +210,24 @@ export function SceneTimelineStrip({ project, engine, currentSceneId, autoCenter
     const container = scenesScrollRef.current;
     if (!container) return;
     function onWheel(e: WheelEvent) {
+      // Ctrl+ホイール(トラックパッドの2本指ピンチもブラウザはこれとして送ってくる)は
+      // スクロールではなくズームとして扱う。カーソル位置の時刻が画面上でずれないよう、
+      // 倍率の変化に合わせてscrollLeftを補正する(Python版のtimelineScroll wheelハンドラと同じ方式)。
+      if (e.ctrlKey && onZoomChange) {
+        e.preventDefault();
+        const rect = container!.getBoundingClientRect();
+        const cursorX = e.clientX - rect.left;
+        const anchorContentX = container!.scrollLeft + cursorX;
+        const factor = Math.exp(-e.deltaY * 0.01);
+        const nextZoom = Math.min(WHEEL_ZOOM_MAX, Math.max(WHEEL_ZOOM_MIN, zoom * factor));
+        onZoomChange(nextZoom);
+        // チップ幅はzoom propが更新された次の描画でしか反映されないため、1フレーム遅らせて補正する。
+        requestAnimationFrame(() => {
+          if (!scenesScrollRef.current) return;
+          scenesScrollRef.current.scrollLeft = anchorContentX * (nextZoom / zoom) - cursorX;
+        });
+        return;
+      }
       const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
       if (delta === 0) return;
       e.preventDefault();
@@ -212,7 +240,7 @@ export function SceneTimelineStrip({ project, engine, currentSceneId, autoCenter
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => container.removeEventListener('wheel', onWheel);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoCenter]);
+  }, [autoCenter, zoom, onZoomChange]);
 
   // タイムラインの先頭（0秒）や末尾も画面中央まで持って来られるよう、チップ列の
   // 前後にビューポート半分ぶんの余白を持たせる（autoCenterモードのみ）。これが無いと、

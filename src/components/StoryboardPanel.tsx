@@ -112,6 +112,21 @@ function TransitionButton({ scene, disabled }: TransitionButtonProps) {
   );
 }
 
+const PLAYBACK_RATES = [1, 1.25, 1.5, 2];
+
+/** プレビューの再生速度切り替え(1x/1.25x/1.5x/2x)。書き出し結果には影響しない(Python版のspeed-btnと同じ)。 */
+function PlaybackSpeedControl({ rate, onChange }: { rate: number; onChange: (rate: number) => void }) {
+  return (
+    <div className="context-toolbar__segmented storyboard__speed">
+      {PLAYBACK_RATES.map((r) => (
+        <button key={r} type="button" className={rate === r ? 'is-active' : ''} onClick={() => onChange(r)}>
+          {r}x
+        </button>
+      ))}
+    </div>
+  );
+}
+
 const ZOOM_MIN = 50;
 const ZOOM_MAX = 400;
 const ZOOM_STEP = 10;
@@ -219,6 +234,7 @@ export function StoryboardPanel({ project, currentSceneId, onSelectScene, engine
         >
           <ScissorsIcon size={16} />
         </button>
+        <PlaybackSpeedControl rate={engine.playbackRate} onChange={engine.setPlaybackRate} />
         <ZoomControl zoomPercent={zoomPercent} onChange={setZoomPercent} />
       </div>
       <SceneTimelineStrip
@@ -227,6 +243,7 @@ export function StoryboardPanel({ project, currentSceneId, onSelectScene, engine
         currentSceneId={currentSceneId}
         autoCenter={false}
         zoom={zoomPercent / 100}
+        onZoomChange={(nextZoom) => setZoomPercent(Math.round(nextZoom * 100))}
       />
       <OverlayTrackPanel project={project} engine={engine} zoom={zoomPercent / 100} />
       {isTimingOpen && currentScene && <LayerTimelinePanel scene={currentScene} project={project} engine={engine} />}

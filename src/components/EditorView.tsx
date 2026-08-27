@@ -12,12 +12,13 @@ import { ClipBulkImport } from './ClipBulkImport';
 import { ContextToolbar } from './ContextToolbar';
 import { EditorToolbar } from './EditorToolbar';
 import { ImageCropModal } from './ImageCropModal';
-import { BackIcon, CaptionIcon, FolderOpenIcon, ImageIcon, TextIcon } from './icons';
+import { BackIcon, CaptionIcon, ChaptersIcon, FolderOpenIcon, ImageIcon, TextIcon } from './icons';
 import { Inspector } from './Inspector';
 import { MediaLibraryPanel } from './MediaLibraryPanel';
 import { MenubarMenu } from './MenubarMenu';
 import { PreviewPanel } from './PreviewPanel';
 import { StoryboardPanel } from './StoryboardPanel';
+import { YoutubeChaptersModal } from './YoutubeChaptersModal';
 
 export function EditorView() {
   const project = useProjectStore((s) => s.project);
@@ -33,6 +34,7 @@ export function EditorView() {
   const [exportProgress, setExportProgress] = useState(0);
   const [exportQuality, setExportQuality] = useState<ExportQuality>('high');
   const [isMediaOpen, setMediaOpen] = useState(false);
+  const [isChaptersOpen, setChaptersOpen] = useState(false);
   const [croppingImageLayerId, setCroppingImageLayerId] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
@@ -44,13 +46,24 @@ export function EditorView() {
   }, [currentSceneId, selectLayer]);
 
   useEffect(() => {
+    // Python版と同じショートカット: スペースで再生/一時停止、←→で5秒シーク
+    // (クリップの境界を越えて前後のクリップへも自然に移動する。engine.seek()が
+    // 全体タイムライン上のグローバル時刻でクランプ/解決するため、単純な加減算で済む)。
+    const SEEK_STEP_MS = 5000;
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.code !== 'Space') return;
       const target = e.target as HTMLElement | null;
       if (target && ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName)) return;
-      e.preventDefault();
-      if (engine.isPlaying) engine.pause();
-      else engine.play();
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (engine.isPlaying) engine.pause();
+        else engine.play();
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        engine.seek(engine.getLiveTimeMs() + SEEK_STEP_MS);
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        engine.seek(engine.getLiveTimeMs() - SEEK_STEP_MS);
+      }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -126,6 +139,9 @@ export function EditorView() {
         <input className="editor__project-name" value={project.name} onChange={(e) => renameProject(e.target.value)} />
         <button className="btn-pill" onClick={() => void handleExportProjectFile()}>
           プロジェクトを書き出す
+        </button>
+        <button className="btn-icon" onClick={() => setChaptersOpen(true)} title="YouTubeチャプターを表示" aria-label="YouTubeチャプターを表示">
+          <ChaptersIcon />
         </button>
         <label className="context-toolbar__checkbox">
           <input
@@ -244,6 +260,7 @@ export function EditorView() {
         }}
       />
       {isMediaOpen && <MediaLibraryPanel project={project} scene={currentScene} onClose={() => setMediaOpen(false)} />}
+      {isChaptersOpen && <YoutubeChaptersModal project={project} onClose={() => setChaptersOpen(false)} />}
       {croppingLayer && (
         <ImageCropModal
           layer={croppingLayer}
