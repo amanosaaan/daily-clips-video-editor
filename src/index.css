@@ -2070,28 +2070,26 @@ button.editor__menubar-item[aria-expanded='true'] {
 }
 
 /* デバッグログ(devtools/Web Inspectorが使えない環境向けの簡易ログ表示)。
-   常に最前面・画面右下に小さく浮かせておく。 */
+   常に最前面・画面右下に小さく浮かせておく。ライト/ダークどちらのテーマでも
+   はっきり見えるよう、背景色をテーマに依存させず常に濃色+白アイコンにしている
+   (以前var(--bg-panel)+薄い枠+半透明にしていたところ、ライトテーマの白背景に
+   ほぼ溶け込んで見えなくなってしまっていたため)。iPhoneのホームインジケーターに
+   被らないよう、下端の余白にsafe-area-inset-bottomも足している。 */
 .debug-log__fab {
   position: fixed;
   right: 14px;
-  bottom: 14px;
-  width: 36px;
-  height: 36px;
+  bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  width: 40px;
+  height: 40px;
   border-radius: 50%;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  color: var(--text);
+  background: #202124;
+  border: 2px solid #ffffff;
+  color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-  z-index: 200;
-  opacity: 0.55;
-}
-
-.debug-log__fab:hover,
-.debug-log__fab:focus-visible {
-  opacity: 1;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  z-index: 500;
 }
 
 .debug-log__badge {
@@ -2113,16 +2111,16 @@ button.editor__menubar-item[aria-expanded='true'] {
 .debug-log__panel {
   position: fixed;
   right: 14px;
-  bottom: 58px;
+  bottom: calc(62px + env(safe-area-inset-bottom, 0px));
   left: 14px;
-  top: 14px;
+  top: calc(14px + env(safe-area-inset-top, 0px));
   max-width: 480px;
   margin-left: auto;
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-  z-index: 201;
+  z-index: 501;
   display: flex;
   flex-direction: column;
   overflow: hidden;
