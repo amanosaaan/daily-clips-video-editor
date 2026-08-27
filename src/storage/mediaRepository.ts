@@ -16,13 +16,17 @@ function detectKind(mime: string): MediaAsset['kind'] {
 // seekedといったイベントが発火しない(または非常に不安定になる)ことがある。読み込み中の
 // プログレスが0/Nのまま永久に固まって見える不具合の主因だったため、useProjectPlaybackEngine.ts
 // で既に使っている「画面外の非表示コンテナに実体を置いておく」パターンをここでも踏襲する。
+// 幅・高さを0にすると(特にiOS/WebKitで)実質非表示扱いとなりデコード自体が行われないことが
+// あるため、面積0にはせず画面外へ大きくずらす形にする。
 let hiddenMediaContainer: HTMLDivElement | null = null;
 function getHiddenMediaContainer(): HTMLDivElement {
   if (!hiddenMediaContainer) {
     const container = document.createElement('div');
     container.style.position = 'fixed';
-    container.style.width = '0';
-    container.style.height = '0';
+    container.style.left = '-9999px';
+    container.style.top = '0';
+    container.style.width = '2px';
+    container.style.height = '2px';
     container.style.overflow = 'hidden';
     container.style.pointerEvents = 'none';
     container.setAttribute('aria-hidden', 'true');

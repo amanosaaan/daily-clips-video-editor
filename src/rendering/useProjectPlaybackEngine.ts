@@ -124,11 +124,17 @@ export function useProjectPlaybackEngine(
   // 動画要素を実際にDOMへ配置しておく置き場所（非表示）。
   // detached な <video> のまま drawImage で毎フレーム読むと、ブラウザが
   // オフスクリーン扱いにしてデコードを間引き、再生がカクつくことがあるため。
+  // 幅・高さ0の要素はiOS(WebKit)では「実質非表示」とみなされ、再生や音声は
+  // 進んでいるように見えても実際のフレームがデコード・合成されず、
+  // canvasへのdrawImageが真っ黒になることがある(面積0の場合の既知の挙動)。
+  // そのため画面外へ大きくずらす形にして、幅・高さ自体は0にしない。
   useEffect(() => {
     const container = document.createElement('div');
     container.style.position = 'fixed';
-    container.style.width = '0';
-    container.style.height = '0';
+    container.style.left = '-9999px';
+    container.style.top = '0';
+    container.style.width = '2px';
+    container.style.height = '2px';
     container.style.overflow = 'hidden';
     container.style.pointerEvents = 'none';
     container.setAttribute('aria-hidden', 'true');
@@ -441,11 +447,17 @@ export function useProjectPlaybackEngine(
           if (layer.type === 'video') {
             const el = assetsRef.current.get(layer.mediaId);
             if (el instanceof HTMLVideoElement) {
+              // muted/volumeもこのユーザー操作の呼び出しスタック内で確定させておく。
+              // rAFループ側(ユーザー操作ではない)で後からmuted=falseに変えると、
+              // 一部のブラウザでは自動再生ポリシー的に再生が止められてしまうことがあるため。
+              el.muted = layer.muted;
+              el.volume = layer.muted ? 0 : layer.volume;
               syncMediaElement(el, (layer.trimStart + position.localTimeMs) / 1000, true, playbackRateRef.current);
             }
           } else if (layer.type === 'audio') {
             const el = audioAssetsRef.current.get(layer.mediaId);
             if (el) {
+              el.volume = layer.volume;
               syncMediaElement(el, (layer.trimStart + position.localTimeMs) / 1000, true, playbackRateRef.current);
             }
           }
