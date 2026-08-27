@@ -12,88 +12,167 @@ function detectKind(mime: string): MediaAsset['kind'] {
   return 'image';
 }
 
-async function readVideoMetadata(url: string): Promise<{ durationMs: number; width: number; height: number }> {
+// iOS Safari等では、DOM上に接続されていない<video>/<audio>要素はloadedmetadata/loadeddata/
+// seekedといったイベントが発火しない(または非常に不安定になる)ことがある。読み込み中の
+// プログレスが0/Nのまま永久に固まって見える不具合の主因だったため、useProjectPlaybackEngine.ts
+// で既に使っている「画面外の非表示コンテナに実体を置いておく」パターンをここでも踏襲する。
+let hiddenMediaContainer: HTMLDivElement | null = null;
+function getHiddenMediaContainer(): HTMLDivElement {
+  if (!hiddenMediaContainer) {
+    const container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.width = '0';
+    container.style.height = '0';
+    container.style.overflow = 'hidden';
+    container.style.pointerEvents = 'none';
+    container.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(container);
+    hiddenMediaContainer = container;
+  }
+  return hiddenMediaContainer;
+}
+
+/**
+ * 端末やファイル形式によってはメタデータ/サムネイル取得用のイベントが一切発火しないことがあり、
+ * その場合Promiseが永久に解決しない(=読み込み中0/Nのまま固まる)。一定時間で必ず諦めて
+ * 呼び出し元にフォールバックさせるための安全弁。
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
-    const video = document.createElement('video');
-    video.preload = 'metadata';
-    video.muted = true;
-    video.src = url;
-    video.onloadedmetadata = () => {
-      resolve({ durationMs: video.duration * 1000, width: video.videoWidth, height: video.videoHeight });
-    };
-    video.onerror = () => reject(new Error('動画メタデータの読み込みに失敗しました'));
+    const timer = window.setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        window.clearTimeout(timer);
+        reject(err);
+      },
+    );
   });
+}
+
+const METADATA_TIMEOUT_MS = 15000;
+
+async function readVideoMetadata(url: string): Promise<{ durationMs: number; width: number; height: number }> {
+  const video = document.createElement('video');
+  video.preload = 'metadata';
+  video.muted = true;
+  video.playsInline = true;
+  getHiddenMediaContainer().appendChild(video);
+  try {
+    return await withTimeout(
+      new Promise((resolve, reject) => {
+        video.onloadedmetadata = () => {
+          resolve({ durationMs: video.duration * 1000, width: video.videoWidth, height: video.videoHeight });
+        };
+        video.onerror = () => reject(new Error('動画メタデータの読み込みに失敗しました'));
+        video.src = url;
+      }),
+      METADATA_TIMEOUT_MS,
+      '動画メタデータの読み込みがタイムアウトしました',
+    );
+  } finally {
+    video.remove();
+  }
 }
 
 async function readAudioMetadata(url: string): Promise<{ durationMs: number }> {
-  return new Promise((resolve, reject) => {
-    const audio = document.createElement('audio');
-    audio.preload = 'metadata';
-    audio.src = url;
-    audio.onloadedmetadata = () => resolve({ durationMs: audio.duration * 1000 });
-    audio.onerror = () => reject(new Error('音声メタデータの読み込みに失敗しました'));
-  });
+  const audio = document.createElement('audio');
+  audio.preload = 'metadata';
+  getHiddenMediaContainer().appendChild(audio);
+  try {
+    return await withTimeout(
+      new Promise((resolve, reject) => {
+        audio.onloadedmetadata = () => resolve({ durationMs: audio.duration * 1000 });
+        audio.onerror = () => reject(new Error('音声メタデータの読み込みに失敗しました'));
+        audio.src = url;
+      }),
+      METADATA_TIMEOUT_MS,
+      '音声メタデータの読み込みがタイムアウトしました',
+    );
+  } finally {
+    audio.remove();
+  }
 }
 
 async function readImageMetadata(url: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
-    img.onerror = () => reject(new Error('画像メタデータの読み込みに失敗しました'));
-    img.src = url;
-  });
+  return withTimeout(
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight });
+      img.onerror = () => reject(new Error('画像メタデータの読み込みに失敗しました'));
+      img.src = url;
+    }),
+    METADATA_TIMEOUT_MS,
+    '画像メタデータの読み込みがタイムアウトしました',
+  );
 }
 
 async function generateVideoThumbnail(mediaId: string, url: string, width: number, height: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const video = document.createElement('video');
-    video.preload = 'auto';
-    video.muted = true;
-    video.src = url;
-    video.currentTime = 0;
-    video.onloadeddata = () => {
-      video.currentTime = Math.min(0.5, (video.duration || 1) / 2);
-    };
-    video.onseeked = async () => {
-      const canvas = document.createElement('canvas');
-      const scale = Math.min(1, 320 / width);
-      canvas.width = Math.round(width * scale);
-      canvas.height = Math.round(height * scale);
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return reject(new Error('canvas context を取得できませんでした'));
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(async (blob) => {
-        if (!blob) return reject(new Error('サムネイル生成に失敗しました'));
-        const id = nanoid();
-        await db.thumbnails.put({ id, mediaId, blob });
-        resolve(id);
-      }, 'image/jpeg', 0.8);
-    };
-    video.onerror = () => reject(new Error('サムネイル用の動画読み込みに失敗しました'));
-  });
+  const video = document.createElement('video');
+  video.preload = 'auto';
+  video.muted = true;
+  video.playsInline = true;
+  getHiddenMediaContainer().appendChild(video);
+  try {
+    return await withTimeout(
+      new Promise((resolve, reject) => {
+        video.onloadeddata = () => {
+          video.currentTime = Math.min(0.5, (video.duration || 1) / 2);
+        };
+        video.onseeked = async () => {
+          const canvas = document.createElement('canvas');
+          const scale = Math.min(1, 320 / width);
+          canvas.width = Math.round(width * scale);
+          canvas.height = Math.round(height * scale);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) return reject(new Error('canvas context を取得できませんでした'));
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob(async (blob) => {
+            if (!blob) return reject(new Error('サムネイル生成に失敗しました'));
+            const id = nanoid();
+            await db.thumbnails.put({ id, mediaId, blob });
+            resolve(id);
+          }, 'image/jpeg', 0.8);
+        };
+        video.onerror = () => reject(new Error('サムネイル用の動画読み込みに失敗しました'));
+        video.src = url;
+      }),
+      METADATA_TIMEOUT_MS,
+      'サムネイル生成がタイムアウトしました',
+    );
+  } finally {
+    video.remove();
+  }
 }
 
 async function generateImageThumbnail(mediaId: string, url: string, width: number, height: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      const scale = Math.min(1, 320 / width);
-      canvas.width = Math.round(width * scale);
-      canvas.height = Math.round(height * scale);
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return reject(new Error('canvas context を取得できませんでした'));
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      canvas.toBlob(async (blob) => {
-        if (!blob) return reject(new Error('サムネイル生成に失敗しました'));
-        const id = nanoid();
-        await db.thumbnails.put({ id, mediaId, blob });
-        resolve(id);
-      }, 'image/jpeg', 0.8);
-    };
-    img.onerror = () => reject(new Error('サムネイル用の画像読み込みに失敗しました'));
-    img.src = url;
-  });
+  return withTimeout(
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const scale = Math.min(1, 320 / width);
+        canvas.width = Math.round(width * scale);
+        canvas.height = Math.round(height * scale);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('canvas context を取得できませんでした'));
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(async (blob) => {
+          if (!blob) return reject(new Error('サムネイル生成に失敗しました'));
+          const id = nanoid();
+          await db.thumbnails.put({ id, mediaId, blob });
+          resolve(id);
+        }, 'image/jpeg', 0.8);
+      };
+      img.onerror = () => reject(new Error('サムネイル用の画像読み込みに失敗しました'));
+      img.src = url;
+    }),
+    METADATA_TIMEOUT_MS,
+    'サムネイル生成がタイムアウトしました',
+  );
 }
 
 export async function addMediaBlob(
@@ -115,11 +194,26 @@ export async function addMediaBlob(
   let shotDateSource: 'metadata' | 'mtime' | undefined;
 
   if (kind === 'video') {
-    const meta = await readVideoMetadata(url);
-    durationMs = meta.durationMs;
-    width = meta.width;
-    height = meta.height;
-    thumbnailBlobId = await generateVideoThumbnail(id, url, width, height);
+    // メタデータ取得・サムネイル生成は端末/形式によって失敗・タイムアウトすることがあるが、
+    // それだけでクリップの取り込み自体を止めない(失敗した項目だけ諦めて、動画自体は
+    // 取り込む)。以前はここで例外を投げるとaddMediaBlob全体が失敗し、呼び出し元の
+    // 一括取り込みが「そのファイルだけ丸ごとスキップ」になっていた。
+    try {
+      const meta = await readVideoMetadata(url);
+      durationMs = meta.durationMs;
+      width = meta.width;
+      height = meta.height;
+    } catch (err) {
+      console.error('動画メタデータの取得に失敗しました(動画自体は取り込みを続けます):', err);
+    }
+
+    if (width && height) {
+      try {
+        thumbnailBlobId = await generateVideoThumbnail(id, url, width, height);
+      } catch (err) {
+        console.error('サムネイル生成に失敗しました(動画自体は取り込みを続けます):', err);
+      }
+    }
 
     // 撮影日時: MP4のメタデータ(moov/mvhdのcreation_time)から取得できなければ、
     // ファイルの更新日時にフォールバックする(取得できない場合は現在時刻)。
