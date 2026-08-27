@@ -184,6 +184,8 @@ export function useProjectPlaybackEngine(
       audioAssetsRef.current = new Map();
       mediaLoadErrorsRef.current = new Set();
       setMediaLoadErrors(mediaLoadErrorsRef.current);
+      loadedWindowSceneIndexRef.current = null;
+      assetLoadGenerationRef.current += 1;
     }
   }, [project]);
 
@@ -220,16 +222,63 @@ export function useProjectPlaybackEngine(
     }
   }, [project]);
 
-  // 全シーンで参照されている動画/画像を読み込んでおく（シーン境界をまたぐ再生を途切れさせないため）
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
+  /**
+   * 現在のシーン+次の1シーン分だけを実際に読み込む(ウィンドウ方式)。
+   * 以前は全シーンの動画を一度に読み込んで保持していたが、実機で動画クリップが
+   * 複数(3本程度でも)ある場合にモバイル端末側の同時デコード可能数の上限を超えてしまい、
+   * 「クリップの切り替わりで再生が止まる/フリーズする」という不具合が実際に報告された。
+   * 前のシーンは含めない(=常に最大2シーン分までしか同時デコードしない)ことで
+   * この上限に極力当たらないようにしつつ、次のシーンだけは事前に読み込んでおくことで
+   * 順再生時のシーン境界での一瞬のカクつきを避けている。ウィンドウの外に出た素材は
+   * 都度解放する。
+   */
+  const loadedWindowSceneIndexRef = useRef<number | null>(null);
+  const assetLoadGenerationRef = useRef(0);
+
+  const syncAssetWindow = useCallback(
+    async (sceneIndex: number) => {
       if (!project) return;
-      for (const scene of project.scenes) {
+      assetLoadGenerationRef.current += 1;
+      const generation = assetLoadGenerationRef.current;
+
+      const windowIndices = [sceneIndex, sceneIndex + 1].filter((i) => i >= 0 && i < project.scenes.length);
+      const windowScenes = windowIndices.map((i) => project.scenes[i]);
+
+      const activeVideoImageIds = new Set<string>();
+      const activeAudioIds = new Set<string>();
+      for (const scene of windowScenes) {
         for (const layer of scene.layers) {
+          if (layer.type === 'video' || layer.type === 'image') activeVideoImageIds.add(layer.mediaId);
+          if (layer.type === 'audio') activeAudioIds.add(layer.mediaId);
+        }
+      }
+
+      // ウィンドウ外になった素材(デコーダ資源)を解放する
+      for (const [mediaId, el] of assetsRef.current) {
+        if (activeVideoImageIds.has(mediaId)) continue;
+        if (el instanceof HTMLVideoElement) {
+          el.pause();
+          el.removeAttribute('src');
+          el.load();
+          el.remove();
+        }
+        assetsRef.current.delete(mediaId);
+      }
+      for (const [mediaId, el] of audioAssetsRef.current) {
+        if (activeAudioIds.has(mediaId)) continue;
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+        el.remove();
+        audioAssetsRef.current.delete(mediaId);
+      }
+
+      for (const scene of windowScenes) {
+        for (const layer of scene.layers) {
+          if (generation !== assetLoadGenerationRef.current) return; // ウィンドウが変わったら打ち切る
           if ((layer.type === 'video' || layer.type === 'image') && !assetsRef.current.has(layer.mediaId)) {
             const url = await getMediaObjectUrl(layer.mediaId);
-            if (!url || cancelled) continue;
+            if (!url || generation !== assetLoadGenerationRef.current) continue;
             if (layer.type === 'video') {
               const video = document.createElement('video');
               video.playsInline = true;
@@ -253,7 +302,7 @@ export function useProjectPlaybackEngine(
                 MEDIA_LOAD_TIMEOUT_MS,
               );
               if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
-              if (!cancelled) assetsRef.current.set(layer.mediaId, video);
+              if (generation === assetLoadGenerationRef.current) assetsRef.current.set(mediaId, video);
               else video.remove();
             } else {
               const img = new Image();
@@ -273,11 +322,11 @@ export function useProjectPlaybackEngine(
                 MEDIA_LOAD_TIMEOUT_MS,
               );
               if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
-              if (!cancelled) assetsRef.current.set(layer.mediaId, img);
+              if (generation === assetLoadGenerationRef.current) assetsRef.current.set(mediaId, img);
             }
           } else if (layer.type === 'audio' && !audioAssetsRef.current.has(layer.mediaId)) {
             const url = await getMediaObjectUrl(layer.mediaId);
-            if (!url || cancelled) continue;
+            if (!url || generation !== assetLoadGenerationRef.current) continue;
             const audio = document.createElement('audio');
             audio.preload = 'auto';
             hiddenContainerRef.current?.appendChild(audio);
@@ -297,16 +346,27 @@ export function useProjectPlaybackEngine(
               MEDIA_LOAD_TIMEOUT_MS,
             );
             if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
-            if (!cancelled) audioAssetsRef.current.set(layer.mediaId, audio);
+            if (generation === assetLoadGenerationRef.current) audioAssetsRef.current.set(mediaId, audio);
             else audio.remove();
           }
         }
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [project]);
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [project],
+  );
+
+  // ウィンドウの初回読み込みはrAFループ内のシーン切り替え検知に任せず、ここで明示的に
+  // トリガーしておく。rAFはタブが表示されていない/バックグラウンドタブとして開かれた
+  // 直後などに発火が遅れる・止まることがあり、それに頼ると動画の読み込み自体が
+  // 一切始まらない(プレビューが永久に真っ黒のまま)状態になりかねないため。
+  useEffect(() => {
+    if (!project) return;
+    const initialSceneIndex = resolvePosition(project, timeRef.current)?.sceneIndex ?? 0;
+    loadedWindowSceneIndexRef.current = initialSceneIndex;
+    void syncAssetWindow(initialSceneIndex);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, syncAssetWindow]);
 
   useEffect(() => {
     function loop(ts: number) {
@@ -340,6 +400,12 @@ export function useProjectPlaybackEngine(
         if (isPlayingRef.current && timeRef.current >= totalDuration) {
           isPlayingRef.current = false;
           setIsPlaying(false);
+        }
+
+        // シーンが切り替わったら、その前後1シーン分だけを読み込み直す(ウィンドウ方式)。
+        if (position && position.sceneIndex !== loadedWindowSceneIndexRef.current) {
+          loadedWindowSceneIndexRef.current = position.sceneIndex;
+          void syncAssetWindow(position.sceneIndex);
         }
 
         if (position) {
@@ -447,7 +513,8 @@ export function useProjectPlaybackEngine(
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       lastTsRef.current = null;
     };
-  }, [project, canvasRef]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, canvasRef, syncAssetWindow]);
 
   const play = useCallback(() => {
     if (project && timeRef.current >= getTotalDurationMs(project)) {
