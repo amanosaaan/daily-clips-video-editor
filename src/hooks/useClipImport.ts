@@ -8,6 +8,28 @@ export interface ClipImportProgress {
   total: number;
 }
 
+// addMediaFile内部の各処理(動画メタデータ読み込み等)には既に個別のタイムアウトが
+// 掛かっているが、万一それでも想定外の理由で応答が返らなかった場合の最終防衛ライン。
+// これが無いと、1ファイルでも詰まると「次のファイルへ進まない(ボタンも反応しない)」
+// まま importing が true に張り付いてしまう(既存のimportingで全ボタンを無効化する
+// UIの副作用)。
+const IMPORT_FILE_TIMEOUT_MS = 30000;
+function withImportTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error('ファイルの取り込みがタイムアウトしました')), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        window.clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 /**
  * 動画ファイルを1つずつ、フレーム全体を使ったクリップ(シーン)として結合していく
  * 用途向けの一括取り込み。個別ファイル選択・フォルダ選択どちらからも使える
@@ -27,19 +49,26 @@ export function useClipImport(project: Project | null) {
     if (videoFiles.length === 0) return;
     setImporting(true);
     setProgress({ done: 0, total: videoFiles.length });
-    for (let i = 0; i < videoFiles.length; i++) {
-      try {
-        const asset = await addMediaFile(project.id, videoFiles[i]);
-        addMediaAsset(asset);
-        addSceneWithVideo(asset);
-      } catch (err) {
-        console.error(err);
+    // importingがtrueのままだと「追加」ボタン等が無効化されっぱなしになり、次のファイルを
+    // 選ぶことすらできなくなる(disabledなボタンはクリックしても無反応に見える)。
+    // ループ内の想定外のエラーだけでなく、ループの外(並び替え処理等)で何か起きた場合でも
+    // 必ずfinallyでimporting/progressを解除する。
+    try {
+      for (let i = 0; i < videoFiles.length; i++) {
+        try {
+          const asset = await withImportTimeout(addMediaFile(project.id, videoFiles[i]), IMPORT_FILE_TIMEOUT_MS);
+          addMediaAsset(asset);
+          addSceneWithVideo(asset);
+        } catch (err) {
+          console.error('動画の取り込みに失敗しました(このファイルはスキップします):', videoFiles[i].name, err);
+        }
+        setProgress({ done: i + 1, total: videoFiles.length });
       }
-      setProgress({ done: i + 1, total: videoFiles.length });
+      sortScenesByDate();
+    } finally {
+      setProgress(null);
+      setImporting(false);
     }
-    sortScenesByDate();
-    setProgress(null);
-    setImporting(false);
   }
 
   return { importVideoFiles, importing, progress };

@@ -186,7 +186,15 @@ export async function addMediaBlob(
 ): Promise<MediaAsset> {
   const kind = detectKind(blob.type);
   const id = nanoid();
-  await db.mediaBlobs.put({ id, projectId, blob, mime: blob.type, sizeBytes: blob.size });
+  // IndexedDBへの書き込みも、他タブが同じDBへの接続を握ったまま止まっている等の理由で
+  // 稀に応答が返ってこないことがある。ここが詰まると一括取り込みが「次のファイルへ全く
+  // 進まない(ボタンも反応しない)」ように見えてしまうため、他の読み込み処理と同様に
+  // タイムアウトの保険を掛けておく。
+  await withTimeout(
+    db.mediaBlobs.put({ id, projectId, blob, mime: blob.type, sizeBytes: blob.size }),
+    METADATA_TIMEOUT_MS,
+    'IndexedDBへの保存がタイムアウトしました(他のタブでこのアプリを開いたままにしていないか確認してください)',
+  );
 
   const url = getMediaObjectUrlFromBlob(id, blob);
 
