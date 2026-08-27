@@ -2,6 +2,7 @@ import { alignPatches, bringToFrontPatches, rotatePatches, sendToBackPatches, ty
 import type { AudioLayer, Layer, Project, Scene } from '../domain/types';
 import { reorientVideoPatch } from '../domain/videoOrientation';
 import { useProjectStore } from '../state/projectStore';
+import { ColorSwatchInput } from './ColorSwatchInput';
 import {
   AlignBottomIcon,
   AlignCenterHIcon,
@@ -34,7 +35,18 @@ import { NumberField } from './NumberField';
 
 const FONT_OPTIONS = ['sans-serif', 'serif', 'monospace', 'Roboto', 'Noto Sans JP', 'Georgia', 'Impact', 'Courier New'];
 
-function ArrangeGroup({ project, scene, layers }: { project: Project; scene: Scene; layers: Layer[] }) {
+function ArrangeGroup({
+  project,
+  scene,
+  layers,
+  hideRotate,
+}: {
+  project: Project;
+  scene: Scene;
+  layers: Layer[];
+  /** モザイクは回転させると読み戻す範囲の計算が複雑になるため、回転ボタン自体を隠す(compositor.ts参照) */
+  hideRotate?: boolean;
+}) {
   const updateLayer = useProjectStore((s) => s.updateLayer);
 
   function apply(results: LayerPatch[]) {
@@ -91,14 +103,16 @@ function ArrangeGroup({ project, scene, layers }: { project: Project; scene: Sce
           <AlignBottomIcon />
         </button>
       </div>
-      <div className="context-toolbar__icon-row">
-        <button className="context-toolbar__icon-btn" title="反時計回りに90度回転" onClick={() => apply(rotatePatches(layers, -90))}>
-          <RotateLeftIcon />
-        </button>
-        <button className="context-toolbar__icon-btn" title="時計回りに90度回転" onClick={() => apply(rotatePatches(layers, 90))}>
-          <RotateRightIcon />
-        </button>
-      </div>
+      {!hideRotate && (
+        <div className="context-toolbar__icon-row">
+          <button className="context-toolbar__icon-btn" title="反時計回りに90度回転" onClick={() => apply(rotatePatches(layers, -90))}>
+            <RotateLeftIcon />
+          </button>
+          <button className="context-toolbar__icon-btn" title="時計回りに90度回転" onClick={() => apply(rotatePatches(layers, 90))}>
+            <RotateRightIcon />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -197,13 +211,7 @@ export function ContextToolbar({ project, scene, layers, onOpenCrop }: Props) {
               <PlusIcon size={14} />
             </button>
           </div>
-          <input
-            className="context-toolbar__swatch"
-            type="color"
-            title="文字色"
-            value={layer.color}
-            onChange={(e) => updateLayer(sceneId, layer.id, { color: e.target.value })}
-          />
+          <ColorSwatchInput title="文字色" value={layer.color} onChange={(color) => updateLayer(sceneId, layer.id, { color })} />
         </div>
         <div className="context-toolbar__group">
           <div className="context-toolbar__icon-row">
@@ -269,10 +277,9 @@ export function ContextToolbar({ project, scene, layers, onOpenCrop }: Props) {
           </label>
           {layer.strokeColor && (
             <>
-              <input
-                type="color"
+              <ColorSwatchInput
                 value={layer.strokeColor}
-                onChange={(e) => updateLayer(sceneId, layer.id, { strokeColor: e.target.value })}
+                onChange={(color) => updateLayer(sceneId, layer.id, { strokeColor: color })}
               />
               <NumberField
                 min={1}
@@ -297,11 +304,10 @@ export function ContextToolbar({ project, scene, layers, onOpenCrop }: Props) {
           {layer.backgroundColor && (() => {
             const backgroundColor = layer.backgroundColor;
             return (
-              <input
-                type="color"
+              <ColorSwatchInput
                 value={rgbaToHex(backgroundColor)}
-                onChange={(e) =>
-                  updateLayer(sceneId, layer.id, { backgroundColor: hexToRgba(e.target.value, rgbaAlpha(backgroundColor)) })
+                onChange={(color) =>
+                  updateLayer(sceneId, layer.id, { backgroundColor: hexToRgba(color, rgbaAlpha(backgroundColor)) })
                 }
               />
             );
@@ -341,22 +347,34 @@ export function ContextToolbar({ project, scene, layers, onOpenCrop }: Props) {
               <ShapeLineIcon size={16} />
             </button>
           </div>
-          <input
-            className="context-toolbar__swatch"
-            type="color"
-            title="塗り色"
-            value={layer.fill}
-            onChange={(e) => updateLayer(sceneId, layer.id, { fill: e.target.value })}
-          />
-          <input
-            className="context-toolbar__swatch"
-            type="color"
+          <ColorSwatchInput title="塗り色" value={layer.fill} onChange={(color) => updateLayer(sceneId, layer.id, { fill: color })} />
+          <ColorSwatchInput
             title="線の色"
             value={layer.stroke ?? '#000000'}
-            onChange={(e) => updateLayer(sceneId, layer.id, { stroke: e.target.value })}
+            onChange={(color) => updateLayer(sceneId, layer.id, { stroke: color })}
           />
         </div>
         <AnimationControl animation={layer.animation} onChange={(a) => updateLayer(sceneId, layer.id, { animation: a })} />
+        {DeleteButton}
+      </div>
+    );
+  }
+
+  if (layer.type === 'mosaic') {
+    return (
+      <div className="context-toolbar">
+        <ArrangeGroup project={project} scene={scene} layers={layers} hideRotate />
+        <div className="context-toolbar__group">
+          <label>
+            モザイクの強さ
+            <NumberField
+              min={2}
+              max={80}
+              value={layer.blockSize}
+              onChange={(v) => updateLayer(sceneId, layer.id, { blockSize: Math.max(2, v) })}
+            />
+          </label>
+        </div>
         {DeleteButton}
       </div>
     );

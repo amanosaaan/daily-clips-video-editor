@@ -94,7 +94,9 @@ export function PreviewPanel({ project, canvasRef, engine, onOpenCrop, multiSele
   const scene = engine.position?.scene ?? null;
 
   const interactiveLayers = scene
-    ? scene.layers.filter((l) => l.type === 'text' || l.type === 'shape' || l.type === 'image' || l.type === 'video')
+    ? scene.layers.filter(
+        (l) => l.type === 'text' || l.type === 'shape' || l.type === 'mosaic' || l.type === 'image' || l.type === 'video',
+      )
     : [];
   const editingLayer = editingTextLayerId
     ? (interactiveLayers.find((l) => l.id === editingTextLayerId) as TextLayer | undefined)

@@ -100,6 +100,12 @@ export interface ShapeLayer extends BaseLayer {
   stroke?: string;
 }
 
+export interface MosaicLayer extends BaseLayer {
+  type: 'mosaic';
+  /** モザイクのブロックサイズ(px)。大きいほど粗く(強く)なる。 */
+  blockSize: number;
+}
+
 export interface AudioLayer extends BaseLayer {
   type: 'audio';
   mediaId: string;
@@ -109,7 +115,7 @@ export interface AudioLayer extends BaseLayer {
   role: 'voiceover' | 'music';
 }
 
-export type Layer = VideoLayer | ImageLayer | TextLayer | ShapeLayer | AudioLayer;
+export type Layer = VideoLayer | ImageLayer | TextLayer | ShapeLayer | MosaicLayer | AudioLayer;
 
 export interface Scene {
   id: string;

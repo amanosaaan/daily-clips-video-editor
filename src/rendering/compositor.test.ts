@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Scene, ShapeLayer, TextLayer, VideoLayer } from '../domain/types';
+import type { MosaicLayer, Scene, ShapeLayer, TextLayer, VideoLayer } from '../domain/types';
 import { drawSceneFrame, drawTransitionFrame } from './compositor';
 
 function createFakeCtx() {
@@ -15,6 +15,10 @@ function createFakeCtx() {
   const alphaStack: number[] = [];
 
   const ctx = {
+    // モザイク描画がctx.canvas.width/heightを参照するため、実際のcanvasに近い最小限の
+    // モックを用意する(jsdom環境では実描画コンテキストが取れずモザイク本体は早期returnになるが、
+    // クラッシュしないことと呼び出し前後の save/restore は検証できる)。
+    canvas: { width: 640, height: 360 },
     fillStyle: '',
     strokeStyle: '',
     font: '',
@@ -23,6 +27,7 @@ function createFakeCtx() {
     lineJoin: 'miter' as CanvasLineJoin,
     textAlign: 'left' as CanvasTextAlign,
     textBaseline: 'top' as CanvasTextBaseline,
+    imageSmoothingEnabled: true,
     get globalAlpha() {
       return globalAlphaValue;
     },
@@ -370,6 +375,34 @@ describe('date burn-in', () => {
     drawSceneFrame(ctx, scene, 640, 360, new Map());
 
     expect(calls.some((c) => c.startsWith('fillText:') || c.startsWith('strokeText:'))).toBe(false);
+  });
+});
+
+describe('drawLayer mosaic', () => {
+  // 実際のブロック化ピクセルの正しさ(縮小->最近傍拡大)は、jsdomにcanvas実描画が無いため
+  // ここでは検証できない(getContext('2d')がnullを返し、compositor側は静かに早期returnする)。
+  // 実際の見た目は書き出しパイプライン経由でのライブ確認(export→ffmpegでフレーム抽出)で
+  // 検証済み。ここではクラッシュしないこと・他レイヤーと同様にsave/restoreで囲まれることのみ確認する。
+  it('does not throw and wraps rendering in save/restore', () => {
+    const mosaic: MosaicLayer = { ...baseLayer, id: 'mosaic', type: 'mosaic', blockSize: 16, zIndex: 1 };
+    const scene: Scene = { id: 'scene', duration: 1000, layers: [mosaic] };
+    const { ctx, calls } = createFakeCtx();
+
+    expect(() => drawSceneFrame(ctx, scene, 640, 360, new Map())).not.toThrow();
+    expect(calls.filter((c) => c === 'save').length).toBe(calls.filter((c) => c === 'restore').length);
+  });
+
+  it('is skipped like any other layer when hiddenLayerId matches', () => {
+    const mosaic: MosaicLayer = { ...baseLayer, id: 'mosaic', type: 'mosaic', blockSize: 16, zIndex: 1 };
+    const scene: Scene = { id: 'scene', duration: 1000, layers: [mosaic] };
+    const { ctx, calls } = createFakeCtx();
+    const before = calls.length;
+
+    drawSceneFrame(ctx, scene, 640, 360, new Map(), 0, 'mosaic');
+
+    // drawSceneFrame自体のsave/fillRect(背景)/restoreの3件だけになる
+    // (モザイク自体の描画=drawLayer呼び出しは完全にスキップされる)
+    expect(calls.slice(before)).toEqual(['save', 'fillRect', 'restore']);
   });
 });
 

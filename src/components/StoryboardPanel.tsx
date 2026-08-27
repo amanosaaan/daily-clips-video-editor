@@ -17,6 +17,7 @@ import {
   TrashIcon,
 } from './icons';
 import { LayerTimelinePanel } from './LayerTimelinePanel';
+import { OverlayTrackPanel } from './OverlayTrackPanel';
 import { SceneTimelineStrip } from './SceneTimelineStrip';
 
 const TRANSITION_OPTIONS: { type: TransitionConfig['type'] | 'none'; label: string; preview: string }[] = [
@@ -227,6 +228,7 @@ export function StoryboardPanel({ project, currentSceneId, onSelectScene, engine
         autoCenter={false}
         zoom={zoomPercent / 100}
       />
+      <OverlayTrackPanel project={project} engine={engine} zoom={zoomPercent / 100} />
       {isTimingOpen && currentScene && <LayerTimelinePanel scene={currentScene} project={project} engine={engine} />}
       <div className="storyboard__actions">
         <button

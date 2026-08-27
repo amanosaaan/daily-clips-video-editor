@@ -321,8 +321,59 @@ function drawLayer(ctx: Ctx2D, layer: Layer, assets: ResolvedAssetMap, sceneTime
       }
       break;
     }
+    case 'mosaic': {
+      drawMosaic(ctx, layer.x, layer.y, layer.width, layer.height, layer.blockSize);
+      break;
+    }
     case 'audio':
       break;
   }
   ctx.restore();
+}
+
+// モザイクの縮小->拡大に使う作業用キャンバスを使い回す(毎フレーム新規生成しない)。
+// このアプリのcompositorは常にメインスレッドの<canvas>(document.createElement製)を
+// 対象に呼ばれる(プレビュー・書き出しどちらもWorker/OffscreenCanvasは使っていない)ため、
+// document.createElementで問題ない。
+let mosaicScratchCanvas: HTMLCanvasElement | null = null;
+function getMosaicScratchCanvas(): HTMLCanvasElement {
+  if (!mosaicScratchCanvas) mosaicScratchCanvas = document.createElement('canvas');
+  return mosaicScratchCanvas;
+}
+
+/**
+ * 指定範囲を実際にブロック状にモザイク化する(CSSのぼかし近似ではなく本物のピクセル化)。
+ * 手順: 1) 対象範囲を縮小してキャンバス上に描く(縮小時の補間で自然に画素が混ざり合う)
+ *       2) その縮小画像を、補間を切った(nearest-neighbor)状態で元のサイズへ再度拡大して描き戻す
+ * こうすることで、下(既に描画済み)のレイヤーの内容がブロック状に隠れる。
+ * このレイヤー自身より前(zIndexが小さい)に描かれた内容だけが対象になる点は、
+ * Photoshop等のモザイクフィルタと同じ挙動。
+ */
+function drawMosaic(ctx: Ctx2D, layerX: number, layerY: number, layerWidth: number, layerHeight: number, blockSize: number): void {
+  const canvasWidth = ctx.canvas.width;
+  const canvasHeight = ctx.canvas.height;
+  const x = Math.max(0, Math.round(layerX));
+  const y = Math.max(0, Math.round(layerY));
+  const w = Math.min(Math.round(layerWidth), canvasWidth - x);
+  const h = Math.min(Math.round(layerHeight), canvasHeight - y);
+  if (w <= 0 || h <= 0) return;
+
+  const block = Math.max(2, Math.round(blockSize));
+  const smallW = Math.max(1, Math.round(w / block));
+  const smallH = Math.max(1, Math.round(h / block));
+
+  const scratch = getMosaicScratchCanvas();
+  scratch.width = smallW;
+  scratch.height = smallH;
+  const sctx = scratch.getContext('2d');
+  // テスト環境(jsdom)等、実際の2D描画コンテキストが取得できない場合は
+  // 静かに何もしない(呼び出し側でのクラッシュを防ぐ)。
+  if (!sctx) return;
+  sctx.imageSmoothingEnabled = true;
+  sctx.clearRect(0, 0, smallW, smallH);
+  sctx.drawImage(ctx.canvas, x, y, w, h, 0, 0, smallW, smallH);
+
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(scratch, 0, 0, smallW, smallH, x, y, w, h);
+  ctx.imageSmoothingEnabled = true;
 }

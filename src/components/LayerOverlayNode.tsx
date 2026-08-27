@@ -108,7 +108,9 @@ export function LayerOverlayNode({ layer, scale, isSelected, onSelect, onChange,
       {isSelected && (
         <Transformer
           ref={trRef}
-          rotateEnabled
+          // モザイクは回転させると「読み戻す画面上の矩形範囲」の計算が複雑になるため、
+          // Python版と同じく常に軸並行(回転なし)に限定する(compositor.tsのdrawMosaic参照)。
+          rotateEnabled={layer.type !== 'mosaic'}
           flipEnabled={false}
           borderStroke="#1a73e8"
           borderStrokeWidth={2}

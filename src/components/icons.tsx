@@ -26,6 +26,7 @@ import {
   Expand,
   Focus,
   FolderOpen,
+  Grid3x3,
   Group,
   ImageIcon as LucideImageIcon,
   Italic,
@@ -125,3 +126,4 @@ export const SwapIcon = icon(ArrowLeftRight);
 export const VideoIcon = icon(Video);
 export const AudioIcon = icon(AudioLines);
 export const CalendarIcon = icon(Calendar);
+export const MosaicIcon = icon(Grid3x3);

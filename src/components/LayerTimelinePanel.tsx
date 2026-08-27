@@ -10,6 +10,7 @@ import {
   ChevronRightIcon,
   CloseIcon,
   ImageIcon,
+  MosaicIcon,
   ShapeCircleIcon,
   ShapeLineIcon,
   ShapeRectIcon,
@@ -41,6 +42,8 @@ function layerTypeMeta(layer: Layer): { Icon: ComponentType<{ size?: number }>; 
         default:
           return { Icon: ShapeRectIcon, label: '長方形', colorKey: 'shape' };
       }
+    case 'mosaic':
+      return { Icon: MosaicIcon, label: 'モザイク', colorKey: 'mosaic' };
   }
 }
 

@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid';
 import { computeCaptionPresetLayout } from './captionPreset';
-import type { ImageLayer, MediaAsset, Project, Scene, ShapeLayer, TextLayer, VideoLayer } from './types';
+import type { ImageLayer, MediaAsset, MosaicLayer, Project, Scene, ShapeLayer, TextLayer, VideoLayer } from './types';
 
 export function createTextLayer(scene: Scene): TextLayer {
   return {
@@ -156,6 +156,21 @@ export function createShapeLayer(scene: Scene): ShapeLayer {
     y: 60,
     width: 200,
     height: 120,
+    rotation: 0,
+    opacity: 1,
+    zIndex: scene.layers.length + 1,
+  };
+}
+
+export function createMosaicLayer(scene: Scene): MosaicLayer {
+  return {
+    id: nanoid(),
+    type: 'mosaic',
+    blockSize: 16,
+    x: 60,
+    y: 60,
+    width: 240,
+    height: 180,
     rotation: 0,
     opacity: 1,
     zIndex: scene.layers.length + 1,

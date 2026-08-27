@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   createCaptionLayer,
   createImageLayerForScene,
+  createMosaicLayer,
   createShapeLayer,
   createTextLayer,
   cropPatch,
@@ -24,6 +25,7 @@ import {
   CopyIcon,
   ExpandIcon,
   ImageIcon,
+  MosaicIcon,
   MultiSelectIcon,
   PauseIcon,
   PlayIcon,
@@ -296,6 +298,10 @@ export function MobileEditorView() {
         <button className="mobile-tab" onClick={() => addLayerToScene(currentScene.id, createTextLayer(currentScene))}>
           <TextIcon size={20} />
           テキスト
+        </button>
+        <button className="mobile-tab" onClick={() => addLayerToScene(currentScene.id, createMosaicLayer(currentScene))}>
+          <MosaicIcon size={20} />
+          モザイク
         </button>
         <button
           className="mobile-tab"

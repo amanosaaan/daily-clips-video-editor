@@ -744,6 +744,10 @@ button.editor__menubar-item[aria-expanded='true'] {
   background: #ec407a;
 }
 
+.layer-track-row__bar--mosaic {
+  background: #b5701f;
+}
+
 .layer-track-row__bar-pattern {
   position: absolute;
   inset: 0;
@@ -869,6 +873,29 @@ button.editor__menubar-item[aria-expanded='true'] {
   border-radius: 50%;
   cursor: pointer;
   overflow: hidden;
+  flex: none;
+}
+
+/* カラーピッカー+最近使った色のスウォッチ列(Python版の「最近使用した色」パネルのWeb版) */
+.color-swatch-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.color-swatch-input__recents {
+  display: flex;
+  gap: 3px;
+}
+
+.color-swatch-input__recent {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
   flex: none;
 }
 
@@ -1894,5 +1921,106 @@ button.editor__menubar-item[aria-expanded='true'] {
   font-size: 13px;
   text-align: center;
   padding: 20px 0;
+}
+
+/* 文字・図形・モザイクの、全クリップ横断の統合タイムライン帯(OverlayTrackPanel、PC向け)。
+   上のシーンチップ列(scene-timeline)と同じ秒→px換算式を使うので同じzoomなら横幅は揃うが、
+   別のスクロールコンテナのためスクロール位置自体は同期していない(既知の簡易化)。 */
+.overlay-track-panel {
+  margin: 6px 0 0;
+}
+
+.overlay-track-panel__grid {
+  display: flex;
+  gap: 8px;
+}
+
+.overlay-track-panel__labels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: none;
+  width: 72px;
+}
+
+.overlay-track-row__label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 4px;
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.overlay-track-panel__scroll {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.overlay-track-panel__lanes {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.overlay-track-row__lane {
+  position: relative;
+}
+
+.overlay-track-row__bar {
+  position: absolute;
+  height: 20px;
+  border-radius: 5px;
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.overlay-track-row__bar.is-selected {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+.overlay-track-row__bar--text {
+  background: #34a853;
+}
+
+.overlay-track-row__bar--shape {
+  background: #4c8bf5;
+}
+
+.overlay-track-row__bar--mosaic {
+  background: #b5701f;
+}
+
+.overlay-track-row__bar-label {
+  padding: 0 6px;
+  color: #fff;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.overlay-track-row__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.overlay-track-row__handle--start {
+  left: 0;
+}
+
+.overlay-track-row__handle--end {
+  right: 0;
 }
 

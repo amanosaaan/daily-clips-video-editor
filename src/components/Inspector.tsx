@@ -1,8 +1,8 @@
 import { stepZIndexPatches } from '../domain/arrange';
-import { createShapeLayer, createTextLayer } from '../domain/layerFactory';
+import { createMosaicLayer, createShapeLayer, createTextLayer } from '../domain/layerFactory';
 import type { Layer, Scene } from '../domain/types';
 import { useProjectStore } from '../state/projectStore';
-import { CaptionIcon, ImageIcon, ShapeIcon, TextIcon, UploadIcon } from './icons';
+import { CaptionIcon, ImageIcon, MosaicIcon, ShapeIcon, TextIcon, UploadIcon } from './icons';
 import { NumberField } from './NumberField';
 
 interface Props {
@@ -28,6 +28,8 @@ function layerLabel(layer: Layer): string {
       return layer.content.trim() ? `テキスト: ${layer.content.slice(0, 12)}` : 'テキスト';
     case 'shape':
       return `図形 (${{ rect: '矩形', circle: '円', line: '線' }[layer.shape]})`;
+    case 'mosaic':
+      return 'モザイク';
     case 'video':
       return '動画';
     case 'image':
@@ -107,6 +109,10 @@ export function Inspector({ scene, onOpenMedia, onAddCaption, onQuickInsertImage
           <button className="insert-rail__button" onClick={() => addLayerToScene(scene.id, createTextLayer(scene))}>
             <TextIcon size={20} />
             <span>テキスト</span>
+          </button>
+          <button className="insert-rail__button" onClick={() => addLayerToScene(scene.id, createMosaicLayer(scene))}>
+            <MosaicIcon size={20} />
+            <span>モザイク</span>
           </button>
           <button className="insert-rail__button" onClick={onAddCaption}>
             <CaptionIcon size={20} />
