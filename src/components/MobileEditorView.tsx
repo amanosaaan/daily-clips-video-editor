@@ -36,6 +36,7 @@ import {
   UndoIcon,
   UploadIcon,
 } from './icons';
+import { ClipBulkImport } from './ClipBulkImport';
 import { LayerTimelinePanel } from './LayerTimelinePanel';
 import { MediaLibraryPanel } from './MediaLibraryPanel';
 import { PreviewPanel } from './PreviewPanel';
@@ -250,6 +251,7 @@ export function MobileEditorView() {
           </button>
         </div>
         <div className="mobile-editor__scenes">
+          <ClipBulkImport project={project} />
           <SceneTimelineStrip project={project} engine={engine} currentSceneId={currentSceneId} autoCenter />
           {isTimingOpen && <LayerTimelinePanel scene={currentScene} project={project} engine={engine} />}
           <div className="mobile-editor__scenes-actions">

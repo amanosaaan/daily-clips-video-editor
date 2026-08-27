@@ -14,6 +14,7 @@ import {
   AudioLines,
   Bold,
   BringToFront,
+  Calendar,
   Captions,
   ChevronDown,
   ChevronLeft,
@@ -123,3 +124,4 @@ export const ScissorsIcon = icon(Scissors);
 export const SwapIcon = icon(ArrowLeftRight);
 export const VideoIcon = icon(Video);
 export const AudioIcon = icon(AudioLines);
+export const CalendarIcon = icon(Calendar);

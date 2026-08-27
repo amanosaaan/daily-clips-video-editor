@@ -8,6 +8,7 @@ import { addMediaFile } from '../storage/mediaRepository';
 import { exportProjectFile } from '../storage/projectPortability';
 import { useProjectStore } from '../state/projectStore';
 import { ArrangeMenu } from './ArrangeMenu';
+import { ClipBulkImport } from './ClipBulkImport';
 import { ContextToolbar } from './ContextToolbar';
 import { EditorToolbar } from './EditorToolbar';
 import { ImageCropModal } from './ImageCropModal';
@@ -216,6 +217,7 @@ export function EditorView() {
               onOpenCrop={(layerId) => setCroppingImageLayerId(layerId)}
             />
           </div>
+          <ClipBulkImport project={project} />
           <StoryboardPanel
             project={project}
             currentSceneId={currentSceneId}

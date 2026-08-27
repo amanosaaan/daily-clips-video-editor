@@ -1,5 +1,7 @@
 import { nanoid } from 'nanoid';
 import { create } from 'zustand';
+import { createVideoLayerForScene } from '../domain/layerFactory';
+import { sortScenesByShotDate } from '../domain/sceneSort';
 import { splitSceneAt } from '../domain/timeline';
 import type { AspectRatio, Layer, MediaAsset, Project, Scene } from '../domain/types';
 import { ASPECT_RATIO_RESOLUTIONS } from '../domain/types';
@@ -16,10 +18,19 @@ interface EditorState {
   closeProject: () => void;
 
   addScene: () => string | null;
+  /**
+   * 動画クリップを結合していく用途向け: 1つの動画素材から、フレーム全体を
+   * 使った動画レイヤー1つだけを持つ新しいシーン(=クリップ)を1操作で作る。
+   * addScene()+addLayerToScene()+updateSceneDuration()を別々に呼ぶより、
+   * 1回のcommitで完結する分アンドゥ履歴も汚さず確実。
+   */
+  addSceneWithVideo: (asset: MediaAsset) => string | null;
   removeScene: (sceneId: string) => void;
   duplicateScene: (sceneId: string) => string | null;
   splitScene: (sceneId: string, localTimeMs: number) => string | null;
   reorderScenes: (fromIndex: number, toIndex: number) => void;
+  /** 全シーンを撮影日時(Scene.shotDate)順に並び替える。日付不明のシーンは末尾に寄る。 */
+  sortScenesByDate: () => void;
   updateSceneDuration: (sceneId: string, duration: number) => void;
   updateScene: (sceneId: string, patch: Partial<Scene>) => void;
 
@@ -64,7 +75,15 @@ export const useProjectStore = create<EditorState>((set, get) => {
     past: [],
     future: [],
 
-    loadProject: (project) => set({ project, selectedLayerIds: [], past: [], future: [] }),
+    // 開いた/読み込んだ直後は常に撮影日時順になるようにする(動画追加時と同じ方針)。
+    // 手動で並び替えたい場合はシーンチップのドラッグ、または再度「日付順に並び替え」で戻せる。
+    loadProject: (project) =>
+      set({
+        project: { ...project, scenes: sortScenesByShotDate(project.scenes) },
+        selectedLayerIds: [],
+        past: [],
+        future: [],
+      }),
 
     closeProject: () => set({ project: null, selectedLayerIds: [], past: [], future: [] }),
 
@@ -77,6 +96,25 @@ export const useProjectStore = create<EditorState>((set, get) => {
         { selectedLayerIds: [] },
       );
       return scene.id;
+    },
+
+    addSceneWithVideo: (asset) => {
+      const state = get();
+      if (!state.project) return null;
+      const scene: Scene = { id: nanoid(), duration: asset.durationMs || 5000, layers: [], shotDate: asset.shotDatetime };
+      const { layer } = createVideoLayerForScene(state.project, scene, asset);
+      scene.layers = [layer];
+      commit(
+        { ...state.project, scenes: [...state.project.scenes, scene], ...touch() },
+        { selectedLayerIds: [] },
+      );
+      return scene.id;
+    },
+
+    sortScenesByDate: () => {
+      const state = get();
+      if (!state.project) return;
+      commit({ ...state.project, scenes: sortScenesByShotDate(state.project.scenes), ...touch() });
     },
 
     removeScene: (sceneId) => {

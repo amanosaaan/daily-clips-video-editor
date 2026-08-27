@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useEffect, useRef, useState, type DragEvent as ReactDragEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import {
   getSceneStartMs,
   resolvePosition,
@@ -9,6 +9,7 @@ import {
 import type { Project, Scene } from '../domain/types';
 import type { ProjectPlaybackEngine } from '../rendering/useProjectPlaybackEngine';
 import { getThumbnailUrl } from '../storage/mediaRepository';
+import { useProjectStore } from '../state/projectStore';
 
 interface Props {
   project: Project;
@@ -39,9 +40,47 @@ function getSceneMainMediaId(scene: Scene): string | null {
  * （詳しくはPropsのコメント参照）。PC・スマホ共通で使う。
  */
 export function SceneTimelineStrip({ project, engine, currentSceneId, autoCenter, zoom = 1 }: Props) {
+  const reorderScenes = useProjectStore((s) => s.reorderScenes);
   const [sceneThumbUrls, setSceneThumbUrls] = useState<Record<string, string>>({});
   const scenesScrollRef = useRef<HTMLDivElement>(null);
   const inlinePlayheadRef = useRef<HTMLDivElement>(null);
+
+  // シーンチップのドラッグ&ドロップによる並び替え(デスクトップのみ、ネイティブHTML5
+  // Drag and Dropを使う)。チップ列コンテナ側の既存のpointerdown/pointermoveは
+  // シーク(スクラブ)用に既に使われているため、それとは別イベント系統である
+  // ネイティブD&D(dragstart/dragover/drop)を使うことで競合を避けている。
+  const dragSceneIndexRef = useRef<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+
+  function handleChipDragStart(index: number) {
+    return (e: ReactDragEvent<HTMLButtonElement>) => {
+      dragSceneIndexRef.current = index;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', String(index));
+    };
+  }
+  function handleChipDragOver(index: number) {
+    return (e: ReactDragEvent<HTMLButtonElement>) => {
+      if (dragSceneIndexRef.current === null) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      setDragOverIndex(index);
+    };
+  }
+  function handleChipDrop(index: number) {
+    return (e: ReactDragEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      const from = dragSceneIndexRef.current;
+      setDragOverIndex(null);
+      dragSceneIndexRef.current = null;
+      if (from === null || from === index) return;
+      reorderScenes(from, index);
+    };
+  }
+  function handleChipDragEnd() {
+    dragSceneIndexRef.current = null;
+    setDragOverIndex(null);
+  }
 
   // ユーザーが指/マウスでチップ列に触れている（またはその余韻の慣性スクロール中）かどうか。
   // autoCenterモードでのみ使う（チップ列自体がシークバーを兼ねるため、自動追従との
@@ -300,12 +339,18 @@ export function SceneTimelineStrip({ project, engine, currentSceneId, autoCenter
           {project.scenes.map((scene, i) => (
             <button
               key={scene.id}
-              className={`scene-timeline__chip${scene.id === currentSceneId ? ' is-active' : ''}${sceneThumbUrls[scene.id] ? ' has-thumb' : ''}`}
+              className={`scene-timeline__chip${scene.id === currentSceneId ? ' is-active' : ''}${sceneThumbUrls[scene.id] ? ' has-thumb' : ''}${dragOverIndex === i ? ' is-drag-over' : ''}`}
               style={{
                 width: sceneChipWidthPx(scene.duration, zoom),
                 ...(sceneThumbUrls[scene.id] ? { backgroundImage: `url(${sceneThumbUrls[scene.id]})` } : undefined),
               }}
               onClick={autoCenter ? () => engine.seek(getSceneStartMs(project, scene.id)) : undefined}
+              draggable={!autoCenter}
+              onDragStart={handleChipDragStart(i)}
+              onDragOver={handleChipDragOver(i)}
+              onDrop={handleChipDrop(i)}
+              onDragEnd={handleChipDragEnd}
+              title={!autoCenter ? `シーン${i + 1}(ドラッグで並び替え)` : undefined}
             >
               {i + 1}
             </button>
