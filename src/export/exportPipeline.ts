@@ -188,32 +188,43 @@ async function scheduleAudioSourceViaMediabunny(
   sceneDurationMs: number,
 ): Promise<boolean> {
   const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
-  const track = await input.getPrimaryAudioTrack();
-  if (!track) return false;
+  try {
+    // iPhoneのSpatial Audio対応動画は、通常のAAC音声トラックとは別にApple独自の
+    // apacトラックも同梱していることがある。getPrimaryAudioTrack()は無条件だと
+    // このapacトラック(ブラウザ/WebCodecsとも未対応)を「主音声トラック」として
+    // 選んでしまうことがあったため、実際にデコード可能なトラックだけに絞り込む。
+    const track = await input.getPrimaryAudioTrack({ filter: (t) => t.canDecode() });
+    if (!track) return false;
 
-  const offsetSec = trimStartMs / 1000;
-  const endSec = offsetSec + sceneDurationMs / 1000;
-  const gain = offlineCtx.createGain();
-  gain.gain.value = volume;
-  gain.connect(offlineCtx.destination);
+    const offsetSec = trimStartMs / 1000;
+    const endSec = offsetSec + sceneDurationMs / 1000;
+    const gain = offlineCtx.createGain();
+    gain.gain.value = volume;
+    gain.connect(offlineCtx.destination);
 
-  const sink = new AudioBufferSink(track);
-  let scheduledAny = false;
-  for await (const chunk of sink.buffers(offsetSec, endSec)) {
-    const chunkStartInClip = Math.max(chunk.timestamp, offsetSec);
-    const chunkEndInClip = Math.min(chunk.timestamp + chunk.duration, endSec);
-    const playDurationSec = chunkEndInClip - chunkStartInClip;
-    if (playDurationSec <= 0) continue;
-    const withinBufferOffsetSec = chunkStartInClip - chunk.timestamp;
-    const atTime = sceneStartMs / 1000 + (chunkStartInClip - offsetSec);
-    if (atTime < 0) continue;
-    const source = offlineCtx.createBufferSource();
-    source.buffer = chunk.buffer;
-    source.connect(gain);
-    source.start(atTime, withinBufferOffsetSec, playDurationSec);
-    scheduledAny = true;
+    const sink = new AudioBufferSink(track);
+    let scheduledAny = false;
+    for await (const chunk of sink.buffers(offsetSec, endSec)) {
+      const chunkStartInClip = Math.max(chunk.timestamp, offsetSec);
+      const chunkEndInClip = Math.min(chunk.timestamp + chunk.duration, endSec);
+      const playDurationSec = chunkEndInClip - chunkStartInClip;
+      if (playDurationSec <= 0) continue;
+      const withinBufferOffsetSec = chunkStartInClip - chunk.timestamp;
+      const atTime = sceneStartMs / 1000 + (chunkStartInClip - offsetSec);
+      if (atTime < 0) continue;
+      const source = offlineCtx.createBufferSource();
+      source.buffer = chunk.buffer;
+      source.connect(gain);
+      source.start(atTime, withinBufferOffsetSec, playDurationSec);
+      scheduledAny = true;
+    }
+    return scheduledAny;
+  } finally {
+    // Inputを使い終わったら明示的に解放する。放置すると内部のデコーダーリソースが
+    // 残り続け、後続の<video>要素の読み込み(iOS/WebKitはデコーダー同時使用数が
+    // 少ない)を巻き込んでタイムアウトさせる恐れがある。
+    input.dispose();
   }
-  return scheduledAny;
 }
 
 async function scheduleAudioSource(
@@ -240,7 +251,9 @@ async function scheduleAudioSource(
   }
 
   try {
-    return await scheduleAudioSourceViaMediabunny(offlineCtx, blob, trimStartMs, volume, sceneStartMs, sceneDurationMs);
+    return await runExclusiveVideoDecode(() =>
+      scheduleAudioSourceViaMediabunny(offlineCtx, blob, trimStartMs, volume, sceneStartMs, sceneDurationMs),
+    );
   } catch (err) {
     // 音声デコードに失敗した場合はそのレイヤーを無音として扱う(書き出し自体は止めない)。
     // 原因(コーデック非対応等)を追えるよう詳細はコンソールに残しておく。
