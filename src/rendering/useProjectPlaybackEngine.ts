@@ -3,6 +3,7 @@ import { getTotalDurationMs, resolvePosition, type TimelinePosition } from '../d
 import type { Project } from '../domain/types';
 import { getMediaObjectUrl } from '../storage/mediaRepository';
 import { drawSceneFrame, drawTransitionFrame, type ResolvedAssetMap } from './compositor';
+import { runExclusiveVideoDecode } from '../utils/videoDecodeQueue';
 
 export interface ProjectPlaybackEngine {
   isPlaying: boolean;
@@ -255,22 +256,28 @@ export function useProjectPlaybackEngine(
               hiddenContainerRef.current?.appendChild(video);
               video.src = url;
               const mediaId = layer.mediaId;
-              const outcome = await raceTimeout(
-                new Promise<void>((resolve) => {
-                  video.onloadeddata = () => {
-                    video.pause();
-                    clearMediaLoadError(mediaId);
-                    resolve();
-                  };
-                  // video.error.codeでコーデック非対応(MEDIA_ERR_SRC_NOT_SUPPORTED=4)か
-                  // デコード失敗(MEDIA_ERR_DECODE=3)かなどが分かる。
-                  video.onerror = () => {
-                    reportMediaLoadError(mediaId, url, video.error);
-                    resolve();
-                  };
-                  video.play().catch(() => {});
-                }),
-                MEDIA_LOAD_TIMEOUT_MS,
+              // 複数の<video>要素が同時に実際のデコードを試みると、iOS/WebKitでは
+              // どちらもloadeddata/errorが永久に発火しなくなることが実機で繰り返し
+              // 確認されたため、実データの取得(play()呼び出し)はアプリ全体で1本ずつ
+              // 直列に行う(videoDecodeQueue.ts参照)。
+              const outcome = await runExclusiveVideoDecode(() =>
+                raceTimeout(
+                  new Promise<void>((resolve) => {
+                    video.onloadeddata = () => {
+                      video.pause();
+                      clearMediaLoadError(mediaId);
+                      resolve();
+                    };
+                    // video.error.codeでコーデック非対応(MEDIA_ERR_SRC_NOT_SUPPORTED=4)か
+                    // デコード失敗(MEDIA_ERR_DECODE=3)かなどが分かる。
+                    video.onerror = () => {
+                      reportMediaLoadError(mediaId, url, video.error);
+                      resolve();
+                    };
+                    video.play().catch(() => {});
+                  }),
+                  MEDIA_LOAD_TIMEOUT_MS,
+                ),
               );
               if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
               if (!cancelled) assetsRef.current.set(mediaId, video);
@@ -311,20 +318,22 @@ export function useProjectPlaybackEngine(
             hiddenContainerRef.current?.appendChild(audio);
             audio.src = url;
             const mediaId = layer.mediaId;
-            const outcome = await raceTimeout(
-              new Promise<void>((resolve) => {
-                audio.onloadeddata = () => {
-                  audio.pause();
-                  clearMediaLoadError(mediaId);
-                  resolve();
-                };
-                audio.onerror = () => {
-                  reportMediaLoadError(mediaId, url, audio.error);
-                  resolve();
-                };
-                audio.play().catch(() => {});
-              }),
-              MEDIA_LOAD_TIMEOUT_MS,
+            const outcome = await runExclusiveVideoDecode(() =>
+              raceTimeout(
+                new Promise<void>((resolve) => {
+                  audio.onloadeddata = () => {
+                    audio.pause();
+                    clearMediaLoadError(mediaId);
+                    resolve();
+                  };
+                  audio.onerror = () => {
+                    reportMediaLoadError(mediaId, url, audio.error);
+                    resolve();
+                  };
+                  audio.play().catch(() => {});
+                }),
+                MEDIA_LOAD_TIMEOUT_MS,
+              ),
             );
             if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
             if (!cancelled) audioAssetsRef.current.set(mediaId, audio);

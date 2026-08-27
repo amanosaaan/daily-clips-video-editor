@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid';
 import { db } from './db';
 import type { MediaAsset } from '../domain/types';
 import { readMp4CreationTime } from '../domain/videoMetadata';
+import { runExclusiveVideoDecode } from '../utils/videoDecodeQueue';
 
 const mediaUrlCache = new Map<string, string>();
 const thumbnailUrlCache = new Map<string, string>();
@@ -135,6 +136,10 @@ async function readImageMetadata(url: string): Promise<{ width: number; height: 
 }
 
 async function generateVideoThumbnail(mediaId: string, url: string, width: number, height: number): Promise<string> {
+  return runExclusiveVideoDecode(() => generateVideoThumbnailInner(mediaId, url, width, height));
+}
+
+async function generateVideoThumbnailInner(mediaId: string, url: string, width: number, height: number): Promise<string> {
   const video = document.createElement('video');
   video.preload = 'auto';
   video.muted = true;

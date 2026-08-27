@@ -13,6 +13,7 @@ import {
 import type { Project } from '../domain/types';
 import { getMediaBlob, getMediaObjectUrl } from '../storage/mediaRepository';
 import { drawSceneFrame, drawTransitionFrame, type ResolvedAssetMap } from '../rendering/compositor';
+import { runExclusiveVideoDecode } from '../utils/videoDecodeQueue';
 
 export type ExportQuality = 'low' | 'medium' | 'high' | 'veryHigh';
 
@@ -100,22 +101,28 @@ async function loadVideoElement(url: string): Promise<HTMLVideoElement> {
   video.preload = 'auto';
   getHiddenExportContainer().appendChild(video);
   video.src = url;
-  await new Promise<void>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error('動画の読み込みがタイムアウトしました')), 30000);
-    video.onloadeddata = () => {
-      window.clearTimeout(timer);
-      video.pause();
-      resolve();
-    };
-    video.onerror = () => {
-      window.clearTimeout(timer);
-      reject(new Error('動画の読み込みに失敗しました'));
-    };
-    // iOS/WebKitはpreload="auto"を額面通り尊重せず、実際のデータ取得/デコードを
-    // 開始しないことがある。ミュートしたplay()で明示的に読み込みを促す
-    // (mediaRepository.ts/useProjectPlaybackEngine.tsと同じ対策)。
-    video.play().catch(() => {});
-  });
+  // 複数の<video>要素が同時に実際のデコードを試みると、iOS/WebKitではloadeddata/errorが
+  // 永久に発火しなくなることが実機で繰り返し確認されたため、実データの取得は
+  // アプリ全体で1本ずつ直列に行う(videoDecodeQueue.ts参照)。
+  await runExclusiveVideoDecode(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(() => reject(new Error('動画の読み込みがタイムアウトしました')), 30000);
+        video.onloadeddata = () => {
+          window.clearTimeout(timer);
+          video.pause();
+          resolve();
+        };
+        video.onerror = () => {
+          window.clearTimeout(timer);
+          reject(new Error('動画の読み込みに失敗しました'));
+        };
+        // iOS/WebKitはpreload="auto"を額面通り尊重せず、実際のデータ取得/デコードを
+        // 開始しないことがある。ミュートしたplay()で明示的に読み込みを促す
+        // (mediaRepository.ts/useProjectPlaybackEngine.tsと同じ対策)。
+        video.play().catch(() => {});
+      }),
+  );
   return video;
 }
 
