@@ -22,12 +22,29 @@ export interface ProjectPlaybackEngine {
    * スクロール位置の追従など毎フレーム滑らかに動かしたい用途はこちらを使う。
    */
   getLiveTimeMs: () => number;
+  /**
+   * 読み込み(デコード)に失敗した素材のmediaId集合。プレビューが真っ黒/無音になる原因を
+   * 画面上で分かるようにするためのもの(端末が対応していない動画コーデック等で起こりうる)。
+   * 実際の失敗理由はブラウザのコンソールにも詳細を出力している。
+   */
+  mediaLoadErrors: Set<string>;
 }
 
 // 再生中はズレが大きい時だけ補正する（毎フレーム再シークすると音声にガサガサ
 // というノイズが乗るため）。一時停止/スクラブ中は正確に追従させたいので閾値を狭くする。
 const SEEK_THRESHOLD_PLAYING_SEC = 0.75;
 const SEEK_THRESHOLD_PAUSED_SEC = 0.08;
+
+// 端末やファイル形式によってはloadeddata/onerrorのどちらも一切発火しないことがあり、
+// その場合Promiseが永久に解決しない(=このシーンより後の素材が一切読み込まれなくなる)。
+// 一定時間で必ず諦めて次に進むための安全弁。
+const MEDIA_LOAD_TIMEOUT_MS = 15000;
+function raceTimeout(promise: Promise<void>, ms: number): Promise<'ok' | 'timeout'> {
+  return Promise.race([
+    promise.then((): 'ok' => 'ok'),
+    new Promise<'timeout'>((resolve) => window.setTimeout(() => resolve('timeout'), ms)),
+  ]);
+}
 
 /**
  * 動画/音声要素をシーン内のローカル時刻に同期させる。
@@ -36,6 +53,10 @@ const SEEK_THRESHOLD_PAUSED_SEC = 0.08;
  * 「じーー」というブザーのような異音でループする。そのため、ソースの長さを超えた
  * 分は再生を試みず一時停止のままにする。
  */
+// play()が失敗した場合、毎フレーム(el.pausedがtrueのまま)再試行して同じエラーを
+// コンソールに出し続けないよう、要素ごとに一度だけ記録する。
+const loggedPlayErrors = new WeakSet<HTMLMediaElement>();
+
 function syncMediaElement(el: HTMLMediaElement, targetSec: number, shouldPlay: boolean, rate = 1): void {
   const hasEnded = Number.isFinite(el.duration) && el.duration > 0 && targetSec >= el.duration - 0.02;
   if (hasEnded) {
@@ -49,7 +70,14 @@ function syncMediaElement(el: HTMLMediaElement, targetSec: number, shouldPlay: b
   if (Math.abs(el.currentTime - targetSec) > threshold) el.currentTime = targetSec;
 
   if (shouldPlay) {
-    if (el.paused) void el.play().catch(() => {});
+    if (el.paused) {
+      void el.play().catch((err) => {
+        if (!loggedPlayErrors.has(el)) {
+          loggedPlayErrors.add(el);
+          console.error('動画/音声の再生に失敗しました(自動再生がブロックされたか、この端末で対応していない形式の可能性があります):', el.src, err);
+        }
+      });
+    }
   } else if (!el.paused) {
     el.pause();
   }
@@ -61,6 +89,14 @@ export function useProjectPlaybackEngine(
 ): ProjectPlaybackEngine {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTimeMsDisplay, setCurrentTimeMsDisplay] = useState(0);
+  const [mediaLoadErrors, setMediaLoadErrors] = useState<Set<string>>(() => new Set());
+  const mediaLoadErrorsRef = useRef<Set<string>>(new Set());
+  const reportMediaLoadError = useCallback((mediaId: string, url: string, detail: unknown) => {
+    console.error('素材の読み込み(デコード)に失敗しました。この端末/ブラウザが対応していない形式の可能性があります:', url, detail);
+    if (mediaLoadErrorsRef.current.has(mediaId)) return;
+    mediaLoadErrorsRef.current = new Set(mediaLoadErrorsRef.current).add(mediaId);
+    setMediaLoadErrors(mediaLoadErrorsRef.current);
+  }, []);
   const [playbackRate, setPlaybackRateState] = useState(1);
   const playbackRateRef = useRef(1);
   const setPlaybackRate = useCallback((rate: number) => {
@@ -127,6 +163,8 @@ export function useProjectPlaybackEngine(
         el.remove();
       }
       audioAssetsRef.current = new Map();
+      mediaLoadErrorsRef.current = new Set();
+      setMediaLoadErrors(mediaLoadErrorsRef.current);
     }
   }, [project]);
 
@@ -179,19 +217,37 @@ export function useProjectPlaybackEngine(
               video.preload = 'auto';
               hiddenContainerRef.current?.appendChild(video);
               video.src = url;
-              await new Promise<void>((resolve) => {
-                video.onloadeddata = () => resolve();
-                video.onerror = () => resolve();
-              });
+              const mediaId = layer.mediaId;
+              const outcome = await raceTimeout(
+                new Promise<void>((resolve) => {
+                  video.onloadeddata = () => resolve();
+                  // video.error.codeでコーデック非対応(MEDIA_ERR_SRC_NOT_SUPPORTED=4)か
+                  // デコード失敗(MEDIA_ERR_DECODE=3)かなどが分かる。
+                  video.onerror = () => {
+                    reportMediaLoadError(mediaId, url, video.error);
+                    resolve();
+                  };
+                }),
+                MEDIA_LOAD_TIMEOUT_MS,
+              );
+              if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
               if (!cancelled) assetsRef.current.set(layer.mediaId, video);
               else video.remove();
             } else {
               const img = new Image();
               img.src = url;
-              await new Promise<void>((resolve) => {
-                img.onload = () => resolve();
-                img.onerror = () => resolve();
-              });
+              const mediaId = layer.mediaId;
+              const outcome = await raceTimeout(
+                new Promise<void>((resolve) => {
+                  img.onload = () => resolve();
+                  img.onerror = (err) => {
+                    reportMediaLoadError(mediaId, url, err);
+                    resolve();
+                  };
+                }),
+                MEDIA_LOAD_TIMEOUT_MS,
+              );
+              if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
               if (!cancelled) assetsRef.current.set(layer.mediaId, img);
             }
           } else if (layer.type === 'audio' && !audioAssetsRef.current.has(layer.mediaId)) {
@@ -201,10 +257,18 @@ export function useProjectPlaybackEngine(
             audio.preload = 'auto';
             hiddenContainerRef.current?.appendChild(audio);
             audio.src = url;
-            await new Promise<void>((resolve) => {
-              audio.onloadeddata = () => resolve();
-              audio.onerror = () => resolve();
-            });
+            const mediaId = layer.mediaId;
+            const outcome = await raceTimeout(
+              new Promise<void>((resolve) => {
+                audio.onloadeddata = () => resolve();
+                audio.onerror = () => {
+                  reportMediaLoadError(mediaId, url, audio.error);
+                  resolve();
+                };
+              }),
+              MEDIA_LOAD_TIMEOUT_MS,
+            );
+            if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
             if (!cancelled) audioAssetsRef.current.set(layer.mediaId, audio);
             else audio.remove();
           }
@@ -416,5 +480,6 @@ export function useProjectPlaybackEngine(
     getLiveTimeMs,
     playbackRate,
     setPlaybackRate,
+    mediaLoadErrors,
   };
 }

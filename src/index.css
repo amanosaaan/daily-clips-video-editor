@@ -1176,6 +1176,23 @@ button.editor__menubar-item[aria-expanded='true'] {
   inset: 0;
 }
 
+.scene-preview__load-error {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  max-width: 90%;
+  background: rgba(217, 48, 37, 0.92);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  padding: 8px 12px;
+  border-radius: 8px;
+  pointer-events: none;
+  z-index: 2;
+}
+
 .inline-text-editor {
   position: absolute;
   box-sizing: border-box;

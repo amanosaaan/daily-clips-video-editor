@@ -93,6 +93,13 @@ export function PreviewPanel({ project, canvasRef, engine, onOpenCrop, multiSele
   const displayHeight = project.resolution.height * scale;
   const scene = engine.position?.scene ?? null;
 
+  // このシーンの動画/画像/音声のいずれかが読み込みに失敗している場合、プレビューが
+  // 真っ黒/無音になるだけでは原因が分からないため、はっきりメッセージを出す
+  // (端末が対応していないコーデック等が原因のことが多い。詳細はコンソールに出力済み)。
+  const hasSceneLoadError = !!scene?.layers.some(
+    (l) => (l.type === 'video' || l.type === 'image' || l.type === 'audio') && engine.mediaLoadErrors.has(l.mediaId),
+  );
+
   const interactiveLayers = scene
     ? scene.layers.filter(
         (l) => l.type === 'text' || l.type === 'shape' || l.type === 'mosaic' || l.type === 'image' || l.type === 'video',
@@ -157,6 +164,13 @@ export function PreviewPanel({ project, canvasRef, engine, onOpenCrop, multiSele
           </Stage>
           {editingLayer && <InlineTextEditor layer={editingLayer} scale={scale} onCommit={commitEditing} />}
         </div>
+        {hasSceneLoadError && (
+          <div className="scene-preview__load-error" role="alert">
+            この動画/画像/音声の読み込みに失敗しました。
+            <br />
+            端末やブラウザがこのファイル形式に対応していない可能性があります。
+          </div>
+        )}
       </div>
     </div>
   );
