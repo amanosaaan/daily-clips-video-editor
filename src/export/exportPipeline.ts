@@ -68,18 +68,23 @@ async function seekVideo(video: HTMLVideoElement, timeSec: number): Promise<void
 // 書き出し用に読み込む<video>要素の置き場所(非表示)。DOMに繋がっていないと、
 // 特にモバイル端末でloadeddata/seeked/requestVideoFrameCallbackが発火しない・
 // 極端に遅くなることがある(useProjectPlaybackEngine.ts/mediaRepository.tsと同じ理由)。
-// 幅・高さを0にすると実質非表示扱いになりフレームが提示されないことがあるため、
-// 小さくても非ゼロのサイズにして画面外へずらす。
+// 幅・高さを0にすると実質非表示扱いになりフレームが提示されないことがあるため面積0には
+// していないが、それだけでは不十分だったことが実機のデバッグログで判明した。
+// left:-9999pxのようにビューポートの外へ大きくずらす配置自体が、iOS(WebKit)側で
+// 「画面に交差していない要素」としてデコードを止める判定基準になっている可能性が高いため、
+// ビューポート内(0,0)に置いたまま、ごく薄い不透明度と背面へのz-indexで見えなくする。
 let hiddenExportContainer: HTMLDivElement | null = null;
 function getHiddenExportContainer(): HTMLDivElement {
   if (!hiddenExportContainer) {
     const container = document.createElement('div');
     container.style.position = 'fixed';
-    container.style.left = '-9999px';
+    container.style.left = '0';
     container.style.top = '0';
     container.style.width = '2px';
     container.style.height = '2px';
     container.style.overflow = 'hidden';
+    container.style.opacity = '0.01';
+    container.style.zIndex = '-1';
     container.style.pointerEvents = 'none';
     container.setAttribute('aria-hidden', 'true');
     document.body.appendChild(container);

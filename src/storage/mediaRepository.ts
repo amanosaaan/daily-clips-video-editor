@@ -15,19 +15,25 @@ function detectKind(mime: string): MediaAsset['kind'] {
 // iOS Safari等では、DOM上に接続されていない<video>/<audio>要素はloadedmetadata/loadeddata/
 // seekedといったイベントが発火しない(または非常に不安定になる)ことがある。読み込み中の
 // プログレスが0/Nのまま永久に固まって見える不具合の主因だったため、useProjectPlaybackEngine.ts
-// で既に使っている「画面外の非表示コンテナに実体を置いておく」パターンをここでも踏襲する。
+// で既に使っている「非表示コンテナに実体を置いておく」パターンをここでも踏襲する。
 // 幅・高さを0にすると(特にiOS/WebKitで)実質非表示扱いとなりデコード自体が行われないことが
-// あるため、面積0にはせず画面外へ大きくずらす形にする。
+// あるため面積0にはしていないが、それだけでは不十分だったことが実機のデバッグログ
+// (30秒待ってもloadeddataが一切発火しない=デコードが始まっていない)で判明した。
+// left:-9999pxのようにビューポートの外へ大きくずらす配置自体が、iOS(WebKit)側で
+// 「画面に交差していない要素」としてデコードを止める判定基準になっている可能性が高いため、
+// ビューポート内(0,0)に置いたまま、ごく薄い不透明度と背面へのz-indexで見えなくする方式にした。
 let hiddenMediaContainer: HTMLDivElement | null = null;
 function getHiddenMediaContainer(): HTMLDivElement {
   if (!hiddenMediaContainer) {
     const container = document.createElement('div');
     container.style.position = 'fixed';
-    container.style.left = '-9999px';
+    container.style.left = '0';
     container.style.top = '0';
     container.style.width = '2px';
     container.style.height = '2px';
     container.style.overflow = 'hidden';
+    container.style.opacity = '0.01';
+    container.style.zIndex = '-1';
     container.style.pointerEvents = 'none';
     container.setAttribute('aria-hidden', 'true');
     document.body.appendChild(container);

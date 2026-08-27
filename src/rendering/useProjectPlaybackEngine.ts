@@ -140,15 +140,22 @@ export function useProjectPlaybackEngine(
   // 幅・高さ0の要素はiOS(WebKit)では「実質非表示」とみなされ、再生や音声は
   // 進んでいるように見えても実際のフレームがデコード・合成されず、
   // canvasへのdrawImageが真っ黒になることがある(面積0の場合の既知の挙動)。
-  // そのため画面外へ大きくずらす形にして、幅・高さ自体は0にしない。
+  // 幅・高さを2pxに広げただけでは不十分で、実機のデバッグログでloadeddataが
+  // 30秒たっても一切発火しない(=デコード自体が始まっていない)ケースが確認された。
+  // left:-9999pxのようにビューポートの外へ大きくずらす配置自体が、iOS(WebKit)側で
+  // 「画面に交差していない要素」としてデコードを完全に止める判定基準になっている
+  // 可能性が高いため、ビューポート内(0,0)に置いたまま、ごく薄い不透明度と
+  // 背面へのz-indexで視覚的に見えなくする方式に変更した。
   useEffect(() => {
     const container = document.createElement('div');
     container.style.position = 'fixed';
-    container.style.left = '-9999px';
+    container.style.left = '0';
     container.style.top = '0';
     container.style.width = '2px';
     container.style.height = '2px';
     container.style.overflow = 'hidden';
+    container.style.opacity = '0.01';
+    container.style.zIndex = '-1';
     container.style.pointerEvents = 'none';
     container.setAttribute('aria-hidden', 'true');
     document.body.appendChild(container);
