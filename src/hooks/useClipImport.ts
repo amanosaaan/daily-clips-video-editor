@@ -52,13 +52,6 @@ export function useClipImport(project: Project | null) {
     const videoFiles = Array.from(files).filter((f) => f.type.startsWith('video/'));
     if (videoFiles.length === 0) return;
 
-    // 新規プロジェクト作成時に自動で用意される、まだ何も置かれていない空のシーンは、
-    // 実際のクリップを取り込んだ後は不要になる。Python版には「空のシーン」という概念自体が
-    // 無く、クリップ=シーンだったため、これを残したままだと「3つしか追加していないのに
-    // シーンが4つある」ように見えてしまう(実際に報告された不具合)。取り込み開始時点で
-    // 空だったシーンのIDを覚えておき、取り込み後もまだ空のままなら自動で取り除く。
-    const emptySceneIdsBefore = project.scenes.filter((s) => s.layers.length === 0).map((s) => s.id);
-
     setImporting(true);
     setProgress({ done: 0, total: videoFiles.length });
     // importingがtrueのままだと「追加」ボタン等が無効化されっぱなしになり、次のファイルを
@@ -78,11 +71,17 @@ export function useClipImport(project: Project | null) {
       }
       sortScenesByDate();
 
+      // 新規プロジェクト作成時に自動で用意される、まだ何も置かれていない空のシーンは、
+      // 実際のクリップを取り込んだ後は不要になる。Python版には「空のシーン」という概念自体が
+      // 無く、クリップ=シーンだったため、これを残したままだと「3つしか追加していないのに
+      // シーンが4つある」ように見えてしまう(実際に報告された不具合)。取り込み前から
+      // 空だったものに限らず、この時点で空のシーンは(取り込み処理自体が空のシーンを
+      // 作ることは無いため、他の理由で空のまま残っているものも含めて)まとめて取り除く。
+      // 全シーンが空になってしまった場合はremoveScene側が自動で1つ空シーンを補うため安全。
       const latestProject = useProjectStore.getState().project;
       if (latestProject) {
-        for (const id of emptySceneIdsBefore) {
-          const scene = latestProject.scenes.find((s) => s.id === id);
-          if (scene && scene.layers.length === 0) removeScene(id);
+        for (const scene of latestProject.scenes) {
+          if (scene.layers.length === 0) removeScene(scene.id);
         }
       }
     } finally {

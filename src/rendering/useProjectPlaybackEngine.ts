@@ -223,14 +223,17 @@ export function useProjectPlaybackEngine(
   }, [project]);
 
   /**
-   * 現在のシーン+次の1シーン分だけを実際に読み込む(ウィンドウ方式)。
+   * 現在のシーン+前後1シーンだけを実際に読み込む(ウィンドウ方式)。
    * 以前は全シーンの動画を一度に読み込んで保持していたが、実機で動画クリップが
-   * 複数(3本程度でも)ある場合にモバイル端末側の同時デコード可能数の上限を超えてしまい、
+   * 複数ある場合にモバイル端末側の同時デコード可能数の上限を超えてしまい、
    * 「クリップの切り替わりで再生が止まる/フリーズする」という不具合が実際に報告された。
-   * 前のシーンは含めない(=常に最大2シーン分までしか同時デコードしない)ことで
-   * この上限に極力当たらないようにしつつ、次のシーンだけは事前に読み込んでおくことで
-   * 順再生時のシーン境界での一瞬のカクつきを避けている。ウィンドウの外に出た素材は
-   * 都度解放する。
+   * 前のシーンも含める(=最大3シーン分)のは、シーン頭出し(チップクリック)だけでなく
+   * シークバーを直接ドラッグして「前のクリップの途中」に戻るような操作も普通に行われる
+   * ため、直前のシーンだけ含めないと毎回読み込み待ちで真っ黒になってしまったことへの対応。
+   * また、ウィンドウが変わる際は「新しい素材を読み込み終えてから、古い素材を手放す」
+   * 順序にしている(逆にすると、読み込みが終わるまでの間どちらも無い=真っ黒瞬間ができてしまう)。
+   * 現在のシーン自身を最優先で読み込む(前後のシーンより先に試みる)ことで、
+   * 大きくシークした直後でも体感の待ち時間を最小限にしている。
    */
   const loadedWindowSceneIndexRef = useRef<number | null>(null);
   const assetLoadGenerationRef = useRef(0);
@@ -241,7 +244,9 @@ export function useProjectPlaybackEngine(
       assetLoadGenerationRef.current += 1;
       const generation = assetLoadGenerationRef.current;
 
-      const windowIndices = [sceneIndex, sceneIndex + 1].filter((i) => i >= 0 && i < project.scenes.length);
+      const windowIndices = [sceneIndex, sceneIndex - 1, sceneIndex + 1].filter(
+        (i) => i >= 0 && i < project.scenes.length,
+      );
       const windowScenes = windowIndices.map((i) => project.scenes[i]);
 
       const activeVideoImageIds = new Set<string>();
@@ -251,26 +256,6 @@ export function useProjectPlaybackEngine(
           if (layer.type === 'video' || layer.type === 'image') activeVideoImageIds.add(layer.mediaId);
           if (layer.type === 'audio') activeAudioIds.add(layer.mediaId);
         }
-      }
-
-      // ウィンドウ外になった素材(デコーダ資源)を解放する
-      for (const [mediaId, el] of assetsRef.current) {
-        if (activeVideoImageIds.has(mediaId)) continue;
-        if (el instanceof HTMLVideoElement) {
-          el.pause();
-          el.removeAttribute('src');
-          el.load();
-          el.remove();
-        }
-        assetsRef.current.delete(mediaId);
-      }
-      for (const [mediaId, el] of audioAssetsRef.current) {
-        if (activeAudioIds.has(mediaId)) continue;
-        el.pause();
-        el.removeAttribute('src');
-        el.load();
-        el.remove();
-        audioAssetsRef.current.delete(mediaId);
       }
 
       for (const scene of windowScenes) {
@@ -350,6 +335,30 @@ export function useProjectPlaybackEngine(
             else audio.remove();
           }
         }
+      }
+
+      if (generation !== assetLoadGenerationRef.current) return; // その間にウィンドウが変わっていたら何もしない
+
+      // 新しいウィンドウの素材を読み込み終えた後で、ウィンドウ外になった古い素材
+      // (デコーダ資源)を解放する。先に解放してしまうと、新しい素材の読み込みが
+      // 終わるまでの間どちらも無い状態になり、真っ黒瞬間ができてしまうため。
+      for (const [mediaId, el] of assetsRef.current) {
+        if (activeVideoImageIds.has(mediaId)) continue;
+        if (el instanceof HTMLVideoElement) {
+          el.pause();
+          el.removeAttribute('src');
+          el.load();
+          el.remove();
+        }
+        assetsRef.current.delete(mediaId);
+      }
+      for (const [mediaId, el] of audioAssetsRef.current) {
+        if (activeAudioIds.has(mediaId)) continue;
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+        el.remove();
+        audioAssetsRef.current.delete(mediaId);
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
