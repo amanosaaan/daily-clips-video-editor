@@ -39,14 +39,22 @@ export interface ExportOptions {
  * 'seeked'イベントは「シーク操作自体が完了した」タイミングで発火するが、特にモバイル端末や
  * HEVC等キーフレーム間隔の広いコーデックでは、そのタイミングでdrawImageしても実際には
  * 直前のフレームのままのことがあり、書き出し結果がカクつく原因になっていた。
- * requestVideoFrameCallbackは「新しいフレームが実際に提示された」タイミングで呼ばれるため、
- * より正確だが、タブが非アクティブ/非表示の環境ではrAF同様に発火が遅延・停止することがある。
- * そのため'seeked'と両方待ち受け、どちらか早く来た方で確定させる(rVFCが来ればより正確、
- * 来なくても'seeked'だけで従来通り進められる=極端な低速化を避ける)。
+ * requestVideoFrameCallback(rVFC)は「新しいフレームが実際に提示された」タイミングで
+ * 呼ばれるため、より正確。'seeked'イベントは「シーク操作自体が完了した」時点で発火する
+ * だけで、実際のフレーム内容がまだ更新されていないことがある。
+ * 以前は'seeked'とrVFCを同時に待ち受け「どちらか早い方」を採用していたが、実際には
+ * ほぼ常に'seeked'の方が先に発火してしまい、rVFCの正確さがほとんど活かせず、古い
+ * フレームのまま次へ進んでしまうことが多かった(キーフレーム間隔の広いiPhoneの
+ * H.264 High Profile動画で、書き出し結果が「カクカクする」不具合の原因と考えられる)。
+ * そのため、rVFCが使える環境ではrVFCの方を優先して採用し、使えない環境でのみ
+ * 'seeked'にフォールバックする。rVFCはタブが非アクティブ/非表示だと発火が遅延・停止
+ * することがあるが、書き出しはユーザーがその場で操作している前提のため通常は問題ない。
  */
 async function seekVideo(video: HTMLVideoElement, timeSec: number): Promise<void> {
   const clamped = Math.max(0, Math.min(timeSec, video.duration || timeSec));
   if (Math.abs(video.currentTime - clamped) < 0.001) return;
+
+  const useFrameCallback = typeof video.requestVideoFrameCallback === 'function';
 
   return new Promise((resolve) => {
     let settled = false;
@@ -58,15 +66,17 @@ async function seekVideo(video: HTMLVideoElement, timeSec: number): Promise<void
     };
 
     const onSeeked = () => finish();
-    video.addEventListener('seeked', onSeeked);
-    if (typeof video.requestVideoFrameCallback === 'function') {
+    if (useFrameCallback) {
       video.requestVideoFrameCallback(finish);
+    } else {
+      video.addEventListener('seeked', onSeeked);
     }
     video.currentTime = clamped;
 
     // 端末やファイル形式によってはイベントが一切発火しないことがあり、その場合
     // 書き出し全体が永久に止まってしまう。一定時間で諦めて次のフレームへ進む安全弁。
-    window.setTimeout(finish, 1000);
+    // rVFCは'seeked'より発火が遅れる分、タイムアウトも長めに取る。
+    window.setTimeout(finish, useFrameCallback ? 2000 : 1000);
   });
 }
 
