@@ -184,8 +184,6 @@ export function useProjectPlaybackEngine(
       audioAssetsRef.current = new Map();
       mediaLoadErrorsRef.current = new Set();
       setMediaLoadErrors(mediaLoadErrorsRef.current);
-      loadedWindowSceneIndexRef.current = null;
-      assetLoadGenerationRef.current += 1;
     }
   }, [project]);
 
@@ -222,48 +220,22 @@ export function useProjectPlaybackEngine(
     }
   }, [project]);
 
-  /**
-   * 現在のシーン+前後1シーンだけを実際に読み込む(ウィンドウ方式)。
-   * 以前は全シーンの動画を一度に読み込んで保持していたが、実機で動画クリップが
-   * 複数ある場合にモバイル端末側の同時デコード可能数の上限を超えてしまい、
-   * 「クリップの切り替わりで再生が止まる/フリーズする」という不具合が実際に報告された。
-   * 前のシーンも含める(=最大3シーン分)のは、シーン頭出し(チップクリック)だけでなく
-   * シークバーを直接ドラッグして「前のクリップの途中」に戻るような操作も普通に行われる
-   * ため、直前のシーンだけ含めないと毎回読み込み待ちで真っ黒になってしまったことへの対応。
-   * また、ウィンドウが変わる際は「新しい素材を読み込み終えてから、古い素材を手放す」
-   * 順序にしている(逆にすると、読み込みが終わるまでの間どちらも無い=真っ黒瞬間ができてしまう)。
-   * 現在のシーン自身を最優先で読み込む(前後のシーンより先に試みる)ことで、
-   * 大きくシークした直後でも体感の待ち時間を最小限にしている。
-   */
-  const loadedWindowSceneIndexRef = useRef<number | null>(null);
-  const assetLoadGenerationRef = useRef(0);
-
-  const syncAssetWindow = useCallback(
-    async (sceneIndex: number) => {
+  // 全シーンで参照されている動画/画像/音声を読み込んでおく（シーン境界をまたぐ再生を
+  // 途切れさせないため。動画編集アプリ２と同じ、シンプルな全件先読み方式）。
+  // 以前この部分を「現在のシーン前後だけを読み込むウィンドウ方式」に変更したことがあるが、
+  // シーンが切り替わるタイミングでの読み込み/解放のレース(rAFの発火状況に挙動が
+  // 左右される等)により、かえって「シークすると再生できない」不具合を生んでしまった。
+  // 動画3本程度なら全件読み込みでも大抵の端末で問題にならない一方、都度の読み込み待ちが
+  // 無くなる分シンプルで安定するため、元の方式に戻している。
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
       if (!project) return;
-      assetLoadGenerationRef.current += 1;
-      const generation = assetLoadGenerationRef.current;
-
-      const windowIndices = [sceneIndex, sceneIndex - 1, sceneIndex + 1].filter(
-        (i) => i >= 0 && i < project.scenes.length,
-      );
-      const windowScenes = windowIndices.map((i) => project.scenes[i]);
-
-      const activeVideoImageIds = new Set<string>();
-      const activeAudioIds = new Set<string>();
-      for (const scene of windowScenes) {
+      for (const scene of project.scenes) {
         for (const layer of scene.layers) {
-          if (layer.type === 'video' || layer.type === 'image') activeVideoImageIds.add(layer.mediaId);
-          if (layer.type === 'audio') activeAudioIds.add(layer.mediaId);
-        }
-      }
-
-      for (const scene of windowScenes) {
-        for (const layer of scene.layers) {
-          if (generation !== assetLoadGenerationRef.current) return; // ウィンドウが変わったら打ち切る
           if ((layer.type === 'video' || layer.type === 'image') && !assetsRef.current.has(layer.mediaId)) {
             const url = await getMediaObjectUrl(layer.mediaId);
-            if (!url || generation !== assetLoadGenerationRef.current) continue;
+            if (!url || cancelled) continue;
             if (layer.type === 'video') {
               const video = document.createElement('video');
               video.playsInline = true;
@@ -287,7 +259,7 @@ export function useProjectPlaybackEngine(
                 MEDIA_LOAD_TIMEOUT_MS,
               );
               if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
-              if (generation === assetLoadGenerationRef.current) assetsRef.current.set(mediaId, video);
+              if (!cancelled) assetsRef.current.set(mediaId, video);
               else video.remove();
             } else {
               const img = new Image();
@@ -307,11 +279,11 @@ export function useProjectPlaybackEngine(
                 MEDIA_LOAD_TIMEOUT_MS,
               );
               if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
-              if (generation === assetLoadGenerationRef.current) assetsRef.current.set(mediaId, img);
+              if (!cancelled) assetsRef.current.set(mediaId, img);
             }
           } else if (layer.type === 'audio' && !audioAssetsRef.current.has(layer.mediaId)) {
             const url = await getMediaObjectUrl(layer.mediaId);
-            if (!url || generation !== assetLoadGenerationRef.current) continue;
+            if (!url || cancelled) continue;
             const audio = document.createElement('audio');
             audio.preload = 'auto';
             hiddenContainerRef.current?.appendChild(audio);
@@ -331,54 +303,17 @@ export function useProjectPlaybackEngine(
               MEDIA_LOAD_TIMEOUT_MS,
             );
             if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
-            if (generation === assetLoadGenerationRef.current) audioAssetsRef.current.set(mediaId, audio);
+            if (!cancelled) audioAssetsRef.current.set(mediaId, audio);
             else audio.remove();
           }
         }
       }
-
-      if (generation !== assetLoadGenerationRef.current) return; // その間にウィンドウが変わっていたら何もしない
-
-      // 新しいウィンドウの素材を読み込み終えた後で、ウィンドウ外になった古い素材
-      // (デコーダ資源)を解放する。先に解放してしまうと、新しい素材の読み込みが
-      // 終わるまでの間どちらも無い状態になり、真っ黒瞬間ができてしまうため。
-      for (const [mediaId, el] of assetsRef.current) {
-        if (activeVideoImageIds.has(mediaId)) continue;
-        if (el instanceof HTMLVideoElement) {
-          el.pause();
-          el.removeAttribute('src');
-          el.load();
-          el.remove();
-        }
-        assetsRef.current.delete(mediaId);
-      }
-      for (const [mediaId, el] of audioAssetsRef.current) {
-        if (activeAudioIds.has(mediaId)) continue;
-        el.pause();
-        el.removeAttribute('src');
-        el.load();
-        el.remove();
-        audioAssetsRef.current.delete(mediaId);
-      }
-    },
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [project],
-  );
-
-  // ウィンドウの読み込みはrAFループ内のシーン切り替え検知だけに任せず、currentTimeMsDisplay
-  // (seek()呼び出しのたびに同期的に更新される)の変化に反応してここで確実にトリガーする。
-  // rAFはタブが表示されていない/バックグラウンドタブとして開かれた直後などに発火が
-  // 遅れる・止まることがあり、それだけに頼ると「シークバーで別のシーンへ移動しても
-  // その動画が読み込まれず、真っ黒のまま再生できない」状態になりかねないため
-  // (実際にユーザーから報告された不具合)。
-  useEffect(() => {
-    if (!project) return;
-    const sceneIndex = resolvePosition(project, currentTimeMsDisplay)?.sceneIndex ?? 0;
-    if (loadedWindowSceneIndexRef.current === sceneIndex) return;
-    loadedWindowSceneIndexRef.current = sceneIndex;
-    void syncAssetWindow(sceneIndex);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, currentTimeMsDisplay, syncAssetWindow]);
+  }, [project]);
 
   useEffect(() => {
     function loop(ts: number) {
@@ -412,12 +347,6 @@ export function useProjectPlaybackEngine(
         if (isPlayingRef.current && timeRef.current >= totalDuration) {
           isPlayingRef.current = false;
           setIsPlaying(false);
-        }
-
-        // シーンが切り替わったら、その前後1シーン分だけを読み込み直す(ウィンドウ方式)。
-        if (position && position.sceneIndex !== loadedWindowSceneIndexRef.current) {
-          loadedWindowSceneIndexRef.current = position.sceneIndex;
-          void syncAssetWindow(position.sceneIndex);
         }
 
         if (position) {
@@ -525,8 +454,7 @@ export function useProjectPlaybackEngine(
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       lastTsRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, canvasRef, syncAssetWindow]);
+  }, [project, canvasRef]);
 
   const play = useCallback(() => {
     if (project && timeRef.current >= getTotalDurationMs(project)) {
