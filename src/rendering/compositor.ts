@@ -1,7 +1,10 @@
 import { isLayerVisibleAt } from '../domain/layerTiming';
 import type { AnimationConfig, Layer, Scene, TransitionConfig } from '../domain/types';
 
-export type ResolvedAssetMap = Map<string, HTMLVideoElement | HTMLImageElement>;
+// 書き出し(exportPipeline.ts)ではiOS/WebKitの<video>要素シークの不安定さ・低速さを
+// 避けるため、mediabunnyでデコードしたフレームを<canvas>へ描き込んだものを渡すことが
+// ある(プレビュー再生側は従来通り<video>要素のまま)。
+export type ResolvedAssetMap = Map<string, HTMLVideoElement | HTMLImageElement | HTMLCanvasElement>;
 type Ctx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
 export interface DateBurnInOptions {
@@ -222,11 +225,13 @@ function drawLayer(ctx: Ctx2D, layer: Layer, assets: ResolvedAssetMap, sceneTime
           const sWidth = layer.crop.width * el.naturalWidth;
           const sHeight = layer.crop.height * el.naturalHeight;
           ctx.drawImage(el, sx, sy, sWidth, sHeight, layer.x, layer.y, layer.width, layer.height);
-        } else if (layer.type === 'video' && layer.crop && el instanceof HTMLVideoElement) {
-          const sx = layer.crop.x * el.videoWidth;
-          const sy = layer.crop.y * el.videoHeight;
-          const sWidth = layer.crop.width * el.videoWidth;
-          const sHeight = layer.crop.height * el.videoHeight;
+        } else if (layer.type === 'video' && layer.crop && (el instanceof HTMLVideoElement || el instanceof HTMLCanvasElement)) {
+          const srcWidth = el instanceof HTMLVideoElement ? el.videoWidth : el.width;
+          const srcHeight = el instanceof HTMLVideoElement ? el.videoHeight : el.height;
+          const sx = layer.crop.x * srcWidth;
+          const sy = layer.crop.y * srcHeight;
+          const sWidth = layer.crop.width * srcWidth;
+          const sHeight = layer.crop.height * srcHeight;
           ctx.drawImage(el, sx, sy, sWidth, sHeight, layer.x, layer.y, layer.width, layer.height);
         } else {
           ctx.drawImage(el, layer.x, layer.y, layer.width, layer.height);

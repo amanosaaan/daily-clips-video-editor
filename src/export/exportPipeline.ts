@@ -12,6 +12,8 @@ import {
   QUALITY_LOW,
   QUALITY_MEDIUM,
   QUALITY_VERY_HIGH,
+  VideoSampleSink,
+  type VideoSample,
   type Quality,
 } from 'mediabunny';
 import type { Project } from '../domain/types';
@@ -35,109 +37,60 @@ export interface ExportOptions {
 }
 
 /**
- * 動画を指定秒数へシークし、実際にそのフレームが描画に使える状態になるまで待つ。
- * 'seeked'イベントは「シーク操作自体が完了した」タイミングで発火するが、特にモバイル端末や
- * HEVC等キーフレーム間隔の広いコーデックでは、そのタイミングでdrawImageしても実際には
- * 直前のフレームのままのことがあり、書き出し結果がカクつく原因になっていた。
- * requestVideoFrameCallback(rVFC)は「新しいフレームが実際に提示された」タイミングで
- * 呼ばれるため、より正確。'seeked'イベントは「シーク操作自体が完了した」時点で発火する
- * だけで、実際のフレーム内容がまだ更新されていないことがある。
- * 以前は'seeked'とrVFCを同時に待ち受け「どちらか早い方」を採用していたが、実際には
- * ほぼ常に'seeked'の方が先に発火してしまい、rVFCの正確さがほとんど活かせず、古い
- * フレームのまま次へ進んでしまうことが多かった(キーフレーム間隔の広いiPhoneの
- * H.264 High Profile動画で、書き出し結果が「カクカクする」不具合の原因と考えられる)。
- * そのため、rVFCが使える環境ではrVFCの方を優先して採用し、使えない環境でのみ
- * 'seeked'にフォールバックする。rVFCはタブが非アクティブ/非表示だと発火が遅延・停止
- * することがあるが、書き出しはユーザーがその場で操作している前提のため通常は問題ない。
+ * 書き出しの動画フレーム取得は、以前は<video>要素のcurrentTimeシーク("seeked"/
+ * requestVideoFrameCallback待ち)で行っていたが、次のような問題が繰り返し発生した:
+ * - iOS/WebKit実機でloadeddata/errorが永久に発火しない(デコーダー同時使用数制限)
+ * - 'seeked'は実際のフレーム内容が古いまま発火することが多く、書き出し結果がカクつく
+ * - rVFCを優先すると正確にはなるが、キーフレーム間隔の広いiPhone動画で1フレームごとの
+ *   シークが重く、書き出しが極端に遅くなる
+ * これらは全て「<video>要素のシークで1フレームずつ取り出す」という方式そのものに
+ * 起因する不安定さ/低速さと考えられるため、書き出し用に既に導入済みのmediabunny
+ * (WebCodecsベースの自前デマルチプレクサ/デコーダー)のVideoSampleSinkで直接
+ * フレームを取り出す方式に変更した。<video>要素・DOM挿入・シークイベント待ちを
+ * 一切使わないため、上記の問題を構造的に回避できる。
  */
-async function seekVideo(video: HTMLVideoElement, timeSec: number): Promise<void> {
-  const clamped = Math.max(0, Math.min(timeSec, video.duration || timeSec));
-  if (Math.abs(video.currentTime - clamped) < 0.001) return;
+type VideoFrameSource = {
+  /** 直近のフレームを描き込んだcanvas。compositor.tsへはこれを渡す(<video>要素の代わり)。 */
+  canvas: HTMLCanvasElement;
+  sink: VideoSampleSink;
+  input: Input;
+  currentSample: VideoSample | null;
+  currentTimestampSec: number | null;
+};
 
-  const useFrameCallback = typeof video.requestVideoFrameCallback === 'function';
-
-  return new Promise((resolve) => {
-    let settled = false;
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      video.removeEventListener('seeked', onSeeked);
-      resolve();
-    };
-
-    const onSeeked = () => finish();
-    if (useFrameCallback) {
-      video.requestVideoFrameCallback(finish);
-    } else {
-      video.addEventListener('seeked', onSeeked);
-    }
-    video.currentTime = clamped;
-
-    // 端末やファイル形式によってはイベントが一切発火しないことがあり、その場合
-    // 書き出し全体が永久に止まってしまう。一定時間で諦めて次のフレームへ進む安全弁。
-    // rVFCは'seeked'より発火が遅れる分、タイムアウトも長めに取る。
-    window.setTimeout(finish, useFrameCallback ? 2000 : 1000);
-  });
-}
-
-// 書き出し用に読み込む<video>要素の置き場所(非表示)。DOMに繋がっていないと、
-// 特にモバイル端末でloadeddata/seeked/requestVideoFrameCallbackが発火しない・
-// 極端に遅くなることがある(useProjectPlaybackEngine.ts/mediaRepository.tsと同じ理由)。
-// 幅・高さを0にすると実質非表示扱いになりフレームが提示されないことがあるため面積0には
-// していないが、それだけでは不十分だったことが実機のデバッグログで判明した。
-// left:-9999pxのようにビューポートの外へ大きくずらす配置自体が、iOS(WebKit)側で
-// 「画面に交差していない要素」としてデコードを止める判定基準になっている可能性が高いため、
-// ビューポート内(0,0)に置いたまま、ごく薄い不透明度と背面へのz-indexで見えなくする。
-let hiddenExportContainer: HTMLDivElement | null = null;
-function getHiddenExportContainer(): HTMLDivElement {
-  if (!hiddenExportContainer) {
-    const container = document.createElement('div');
-    container.style.position = 'fixed';
-    container.style.left = '0';
-    container.style.top = '0';
-    container.style.width = '2px';
-    container.style.height = '2px';
-    container.style.overflow = 'hidden';
-    container.style.opacity = '0.01';
-    container.style.zIndex = '-1';
-    container.style.pointerEvents = 'none';
-    container.setAttribute('aria-hidden', 'true');
-    document.body.appendChild(container);
-    hiddenExportContainer = container;
+async function createVideoFrameSource(blob: Blob): Promise<VideoFrameSource> {
+  const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+  const track = await input.getPrimaryVideoTrack();
+  if (!track) {
+    input.dispose();
+    throw new Error('動画トラックが見つかりませんでした');
   }
-  return hiddenExportContainer;
+  // 回転メタデータを反映した「表示上の」幅・高さ(<video>要素のvideoWidth/videoHeightに相当)。
+  const displayWidth = await track.getDisplayWidth();
+  const displayHeight = await track.getDisplayHeight();
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(displayWidth));
+  canvas.height = Math.max(1, Math.round(displayHeight));
+  const sink = new VideoSampleSink(track);
+  return { canvas, sink, input, currentSample: null, currentTimestampSec: null };
 }
 
-async function loadVideoElement(url: string): Promise<HTMLVideoElement> {
-  const video = document.createElement('video');
-  video.muted = true;
-  video.playsInline = true;
-  video.preload = 'auto';
-  getHiddenExportContainer().appendChild(video);
-  video.src = url;
-  // 複数の<video>要素が同時に実際のデコードを試みると、iOS/WebKitではloadeddata/errorが
-  // 永久に発火しなくなることが実機で繰り返し確認されたため、実データの取得は
-  // アプリ全体で1本ずつ直列に行う(videoDecodeQueue.ts参照)。
-  await runExclusiveVideoDecode(
-    () =>
-      new Promise<void>((resolve, reject) => {
-        const timer = window.setTimeout(() => reject(new Error('動画の読み込みがタイムアウトしました')), 30000);
-        video.onloadeddata = () => {
-          window.clearTimeout(timer);
-          video.pause();
-          resolve();
-        };
-        video.onerror = () => {
-          window.clearTimeout(timer);
-          reject(new Error('動画の読み込みに失敗しました'));
-        };
-        // iOS/WebKitはpreload="auto"を額面通り尊重せず、実際のデータ取得/デコードを
-        // 開始しないことがある。ミュートしたplay()で明示的に読み込みを促す
-        // (mediaRepository.ts/useProjectPlaybackEngine.tsと同じ対策)。
-        video.play().catch(() => {});
-      }),
-  );
-  return video;
+async function seekVideoFrameSource(source: VideoFrameSource, timeSec: number): Promise<void> {
+  const clamped = Math.max(0, timeSec);
+  if (source.currentTimestampSec !== null && Math.abs(source.currentTimestampSec - clamped) < 0.0005) return;
+  const sample = await source.sink.getSample(clamped);
+  if (!sample) return;
+  const ctx = source.canvas.getContext('2d');
+  if (!ctx) return;
+  sample.draw(ctx, 0, 0, source.canvas.width, source.canvas.height);
+  source.currentSample?.close();
+  source.currentSample = sample;
+  source.currentTimestampSec = clamped;
+}
+
+function disposeVideoFrameSource(source: VideoFrameSource): void {
+  source.currentSample?.close();
+  source.input.dispose();
 }
 
 async function loadImageElement(url: string): Promise<HTMLImageElement> {
@@ -325,15 +278,22 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
   const totalDurationMs = project.scenes.reduce((sum, s) => sum + s.duration, 0);
   const frameDurationSec = 1 / fps;
   const assets: ResolvedAssetMap = new Map();
+  const videoFrameSources = new Map<string, VideoFrameSource>();
 
   try {
     // トランジションで次シーンの素材も必要になるため、全シーン分を先に読み込んでおく
     for (const scene of project.scenes) {
       for (const layer of scene.layers) {
-        if ((layer.type === 'video' || layer.type === 'image') && !assets.has(layer.mediaId)) {
+        if (layer.type === 'video' && !videoFrameSources.has(layer.mediaId)) {
+          const blob = await getMediaBlob(layer.mediaId);
+          if (!blob) continue;
+          const source = await createVideoFrameSource(blob);
+          videoFrameSources.set(layer.mediaId, source);
+          assets.set(layer.mediaId, source.canvas);
+        } else if (layer.type === 'image' && !assets.has(layer.mediaId)) {
           const url = await getMediaObjectUrl(layer.mediaId);
           if (!url) continue;
-          assets.set(layer.mediaId, layer.type === 'video' ? await loadVideoElement(url) : await loadImageElement(url));
+          assets.set(layer.mediaId, await loadImageElement(url));
         }
       }
     }
@@ -352,8 +312,8 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
         const localTimeMs = (f / fps) * 1000;
         for (const layer of scene.layers) {
           if (layer.type === 'video') {
-            const el = assets.get(layer.mediaId) as HTMLVideoElement | undefined;
-            if (el) await seekVideo(el, (layer.trimStart + localTimeMs) / 1000);
+            const source = videoFrameSources.get(layer.mediaId);
+            if (source) await seekVideoFrameSource(source, (layer.trimStart + localTimeMs) / 1000);
           }
         }
 
@@ -361,8 +321,8 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
         if (transition && nextScene && remainingInSceneMs <= transition.durationMs) {
           for (const layer of nextScene.layers) {
             if (layer.type === 'video') {
-              const el = assets.get(layer.mediaId) as HTMLVideoElement | undefined;
-              if (el) await seekVideo(el, layer.trimStart / 1000);
+              const source = videoFrameSources.get(layer.mediaId);
+              if (source) await seekVideoFrameSource(source, layer.trimStart / 1000);
             }
           }
           const progress = 1 - remainingInSceneMs / transition.durationMs;
@@ -391,15 +351,11 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
 
     await output.finalize();
   } finally {
-    // 書き出し用に読み込んだ<video>要素は使い捨てなので、成功/失敗に関わらず必ず片付ける
-    // (放置すると次回以降の書き出しのたびに非表示コンテナ内に要素が増え続けてしまう)。
-    for (const el of assets.values()) {
-      if (el instanceof HTMLVideoElement) {
-        el.pause();
-        el.removeAttribute('src');
-        el.load();
-        el.remove();
-      }
+    // 書き出し用に開いたmediabunnyのInput/VideoFrame等のリソースは使い捨てなので、
+    // 成功/失敗に関わらず必ず解放する(放置するとデコーダーリソースが残り続け、
+    // 次回以降の書き出しに影響する恐れがある)。
+    for (const source of videoFrameSources.values()) {
+      disposeVideoFrameSource(source);
     }
   }
 
