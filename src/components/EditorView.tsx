@@ -13,7 +13,7 @@ import { ClipBulkImport } from './ClipBulkImport';
 import { ContextToolbar } from './ContextToolbar';
 import { EditorToolbar } from './EditorToolbar';
 import { ImageCropModal } from './ImageCropModal';
-import { BackIcon, CaptionIcon, ChaptersIcon, FolderOpenIcon, ImageIcon, TextIcon } from './icons';
+import { BackIcon, CaptionIcon, ChaptersIcon, CloseIcon, FolderOpenIcon, ImageIcon, TextIcon } from './icons';
 import { Inspector } from './Inspector';
 import { MediaLibraryPanel } from './MediaLibraryPanel';
 import { MenubarMenu } from './MenubarMenu';
@@ -34,6 +34,7 @@ export function EditorView() {
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [exportQuality, setExportQuality] = useState<ExportQuality>('high');
+  const [exportedVideo, setExportedVideo] = useState<{ blob: Blob; filename: string } | null>(null);
   const [isMediaOpen, setMediaOpen] = useState(false);
   const [isChaptersOpen, setChaptersOpen] = useState(false);
   const [croppingImageLayerId, setCroppingImageLayerId] = useState<string | null>(null);
@@ -98,14 +99,33 @@ export function EditorView() {
     if (!project) return;
     setExporting(true);
     setExportProgress(0);
+    setExportedVideo(null);
     try {
       const blob = await exportProjectToMp4(project, { onProgress: setExportProgress, quality: exportQuality });
-      await shareOrDownloadVideo(blob, `${project.name || 'video'}.mp4`);
+      // navigator.share()はユーザー操作(クリック)から間を置かずに呼ばないと、ブラウザに
+      // 拒否されることが実機で確認された(iOS版Chromeで確認、書き出し処理は数秒〜
+      // 数十秒かかる非同期処理のため、完了時点ではボタンを押した操作の「有効期限」が
+      // 切れてしまっていたと考えられる: NotAllowedError)。そのため書き出し完了直後に
+      // 自動で保存を呼ぶのではなく、ユーザーが「保存する」ボタンを押した瞬間(新しい
+      // ユーザー操作)にshareOrDownloadVideoを呼ぶよう変更した(MobileEditorView.tsxと同じ)。
+      setExportedVideo({ blob, filename: `${project.name || 'video'}.mp4` });
     } catch (err) {
       console.error(err);
       window.alert('書き出しに失敗しました。ブラウザがMP4書き出しに対応していない可能性があります。');
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function handleSaveExportedVideo() {
+    if (!exportedVideo) return;
+    try {
+      await shareOrDownloadVideo(exportedVideo.blob, exportedVideo.filename);
+    } catch (err) {
+      console.error(err);
+      window.alert('保存に失敗しました。');
+    } finally {
+      setExportedVideo(null);
     }
   }
 
@@ -167,16 +187,32 @@ export function EditorView() {
           className="editor__quality-select"
           value={exportQuality}
           onChange={(e) => setExportQuality(e.target.value as ExportQuality)}
-          disabled={exporting}
+          disabled={exporting || !!exportedVideo}
         >
           <option value="low">画質: 低</option>
           <option value="medium">画質: 中</option>
           <option value="high">画質: 高</option>
           <option value="veryHigh">画質: 最高</option>
         </select>
-        <button className="btn-pill btn-pill--primary" onClick={() => void handleExport()} disabled={exporting}>
-          {exporting ? `書き出し中… ${Math.round(exportProgress * 100)}%` : 'MP4で書き出し'}
-        </button>
+        {exportedVideo ? (
+          <>
+            <button
+              className="btn-icon"
+              onClick={() => setExportedVideo(null)}
+              aria-label="書き出し結果を破棄"
+              title="書き出し結果を破棄"
+            >
+              <CloseIcon size={16} />
+            </button>
+            <button className="btn-pill btn-pill--primary" onClick={() => void handleSaveExportedVideo()}>
+              保存する
+            </button>
+          </>
+        ) : (
+          <button className="btn-pill btn-pill--primary" onClick={() => void handleExport()} disabled={exporting}>
+            {exporting ? `書き出し中… ${Math.round(exportProgress * 100)}%` : 'MP4で書き出し'}
+          </button>
+        )}
       </header>
       <nav className="editor__menubar">
         <MenubarMenu label="ファイル" items={[{ label: '開く', icon: FolderOpenIcon, onClick: () => setMediaOpen(true) }]} />
