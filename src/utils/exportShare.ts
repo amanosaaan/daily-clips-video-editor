@@ -13,16 +13,30 @@
 export async function shareOrDownloadVideo(blob: Blob, filename: string): Promise<void> {
   const file = new File([blob], filename, { type: 'video/mp4' });
 
-  if (typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })) {
+  // ブラウザによってnavigator.share/canShareの対応状況やfiles対応が異なり、
+  // 「共有シートが期待通り開かない/写真アプリが選択肢に出ない」という報告があった際の
+  // 切り分け用に、どの経路を通ったかデバッグログ(DebugLogPanel)に残す。
+  const hasShare = typeof navigator.share === 'function';
+  const hasCanShare = typeof navigator.canShare === 'function';
+  const canShareFiles = hasCanShare && navigator.canShare({ files: [file] });
+  console.warn('shareOrDownloadVideo: hasShare=', hasShare, 'hasCanShare=', hasCanShare, 'canShareFiles=', canShareFiles);
+
+  if (canShareFiles) {
     try {
       await navigator.share({ files: [file], title: filename });
+      console.warn('shareOrDownloadVideo: navigator.share succeeded');
       return;
     } catch (err) {
       // ユーザーが共有シートを自分でキャンセルした場合(AbortError)は、
       // ダウンロードへのフォールバックはせずそのまま終える(意図した操作のため)。
-      if (err instanceof Error && err.name === 'AbortError') return;
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.warn('shareOrDownloadVideo: user cancelled share sheet');
+        return;
+      }
       console.warn('共有シートでの保存に失敗したため、ファイルのダウンロードにフォールバックします:', err);
     }
+  } else {
+    console.warn('shareOrDownloadVideo: canShare(files) unsupported, falling back to <a download>');
   }
 
   const url = URL.createObjectURL(blob);
