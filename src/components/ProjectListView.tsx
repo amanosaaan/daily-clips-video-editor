@@ -64,8 +64,9 @@ export function ProjectListView() {
     <div className="project-list">
       <h1>
         <div className="editor__logo" />
-        動画編集アプリ(クリップ結合)
+        デイリークリップス
       </h1>
+      <p className="project-list__tagline">日付順に動画をつないで、思い出をまとめて残すバックアップアプリ</p>
       <section className="project-list__new">
         <h2>新規プロジェクト</h2>
         <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="プロジェクト名" />

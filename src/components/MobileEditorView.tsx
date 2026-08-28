@@ -200,6 +200,7 @@ export function MobileEditorView() {
         <button className="mobile-icon-btn" onClick={closeProject} aria-label="閉じる">
           <CloseIcon size={20} />
         </button>
+        <span className="mobile-editor__app-name">デイリークリップス</span>
         <div className="mobile-editor__top-right">
           <select
             className="mobile-editor__quality-select"

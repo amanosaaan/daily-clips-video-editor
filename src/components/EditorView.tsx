@@ -152,6 +152,7 @@ export function EditorView() {
           <BackIcon />
         </button>
         <div className="editor__logo" />
+        <span className="editor__app-name">デイリークリップス</span>
         <input className="editor__project-name" value={project.name} onChange={(e) => renameProject(e.target.value)} />
         <button className="btn-pill" onClick={() => void handleExportProjectFile()}>
           プロジェクトを書き出す

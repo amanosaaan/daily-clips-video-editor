@@ -175,6 +175,16 @@ label {
   gap: 10px;
 }
 
+/* 参考にした動画編集アプリ２(ストーリーボード型の汎用エディタ)と混同されないよう、
+   「日付順にクリップを結合する思い出バックアップ用アプリ」であることが一目で
+   分かるようにするための一言。ファイル選択画面だけでなく編集画面のヘッダーにも
+   同じ名前(.editor__app-name)を出している。 */
+.project-list__tagline {
+  margin: -4px 0 32px;
+  color: var(--text);
+  opacity: 0.7;
+  font-size: 13px;
+}
 
 .project-list__new {
   display: flex;
@@ -261,6 +271,17 @@ label {
   border-width: 6px 0 6px 9px;
   border-color: transparent transparent transparent #fff;
   transform: translate(-35%, -50%);
+}
+
+/* 参考にした動画編集アプリ２(汎用ストーリーボード型エディタ)と混同されないよう、
+   編集画面のヘッダーにも常にアプリ名を出しておく(project-list__taglineと対)。 */
+.editor__app-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  opacity: 0.6;
+  flex: none;
+  white-space: nowrap;
 }
 
 .editor__project-name {
@@ -1632,6 +1653,19 @@ button.editor__menubar-item[aria-expanded='true'] {
   gap: 10px;
   padding: 10px 14px;
   flex: none;
+}
+
+.mobile-editor__app-name {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text);
+  opacity: 0.6;
 }
 
 .mobile-editor__top-right {
