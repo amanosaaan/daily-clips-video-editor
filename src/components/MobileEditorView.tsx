@@ -146,7 +146,8 @@ export function MobileEditorView() {
   async function handleSaveExportedVideo() {
     if (!exportedVideo) return;
     try {
-      await shareOrDownloadVideo(exportedVideo.blob, exportedVideo.filename);
+      // モバイルでは共有シート経由で写真アプリへ直接保存できるようにする(preferShare=true)。
+      await shareOrDownloadVideo(exportedVideo.blob, exportedVideo.filename, true);
     } catch (err) {
       console.error(err);
       window.alert('保存に失敗しました。');

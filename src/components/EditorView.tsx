@@ -120,7 +120,9 @@ export function EditorView() {
   async function handleSaveExportedVideo() {
     if (!exportedVideo) return;
     try {
-      await shareOrDownloadVideo(exportedVideo.blob, exportedVideo.filename);
+      // PCでは「写真」のような特別な保存先が無く、共有シートはただ手間が増えるだけなので
+      // 常に通常のダウンロードにする(preferShare=false)。
+      await shareOrDownloadVideo(exportedVideo.blob, exportedVideo.filename, false);
     } catch (err) {
       console.error(err);
       window.alert('保存に失敗しました。');

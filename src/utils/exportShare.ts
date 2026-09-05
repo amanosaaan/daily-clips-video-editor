@@ -2,15 +2,19 @@
  * 書き出したMP4を「ファイルとしてダウンロード」ではなく、iOS/Androidの共有シート経由で
  * 端末の写真(カメラロール)アプリへ直接保存できるようにする。
  *
- * ブラウザの<a download>によるダウンロードは、iOSではFilesアプリ(ダウンロード)に
- * 保存されるだけで、写真アプリには入らない。一方Web Share API(navigator.share)に
- * ファイルを渡すと、OS標準の共有シートが開き、そこから「ビデオを保存」を選ぶと
- * 写真アプリへ直接保存できる(iOS Safari/Chromeとも対応)。
+ * ブラウザの<a download>によるダウンロードは、iOSではFilesアプリに保存されるだけで
+ * 写真アプリには入らない。一方Web Share API(navigator.share)にファイルを渡すと、
+ * OS標準の共有シートが開き、そこから「ビデオを保存」を選ぶと写真アプリへ直接
+ * 保存できる(iOS Safari/Chromeとも対応)。
  *
- * 対応していない環境(デスクトップ等)では、従来通りのファイルダウンロードに
- * フォールバックする。
+ * ただし、Windows PC(Chrome/Edge)でもnavigator.share/canShareがファイル共有に
+ * 対応しており、この共有シートを開いてしまうことが実機で確認された。PCでは
+ * 「写真」のような特別な保存先が無く、共有シート経由の保存は単に手間が増えるだけ
+ * (ユーザーは単純にダウンロードフォルダへの保存を期待している)なので、
+ * 呼び出し元(モバイル向けUIかどうか)からpreferShareで明示的に指定してもらい、
+ * モバイルの場合だけ共有シートを試す。PCでは常に<a download>で保存する。
  */
-export async function shareOrDownloadVideo(blob: Blob, filename: string): Promise<void> {
+export async function shareOrDownloadVideo(blob: Blob, filename: string, preferShare: boolean): Promise<void> {
   const file = new File([blob], filename, { type: 'video/mp4' });
 
   // ブラウザによってnavigator.share/canShareの対応状況やfiles対応が異なり、
@@ -18,8 +22,17 @@ export async function shareOrDownloadVideo(blob: Blob, filename: string): Promis
   // 切り分け用に、どの経路を通ったかデバッグログ(DebugLogPanel)に残す。
   const hasShare = typeof navigator.share === 'function';
   const hasCanShare = typeof navigator.canShare === 'function';
-  const canShareFiles = hasCanShare && navigator.canShare({ files: [file] });
-  console.warn('shareOrDownloadVideo: hasShare=', hasShare, 'hasCanShare=', hasCanShare, 'canShareFiles=', canShareFiles);
+  const canShareFiles = preferShare && hasCanShare && navigator.canShare({ files: [file] });
+  console.warn(
+    'shareOrDownloadVideo: preferShare=',
+    preferShare,
+    'hasShare=',
+    hasShare,
+    'hasCanShare=',
+    hasCanShare,
+    'canShareFiles=',
+    canShareFiles,
+  );
 
   if (canShareFiles) {
     try {
@@ -36,7 +49,7 @@ export async function shareOrDownloadVideo(blob: Blob, filename: string): Promis
       console.warn('共有シートでの保存に失敗したため、ファイルのダウンロードにフォールバックします:', err);
     }
   } else {
-    console.warn('shareOrDownloadVideo: canShare(files) unsupported, falling back to <a download>');
+    console.warn('shareOrDownloadVideo: preferShare=false or canShare(files) unsupported, using <a download>');
   }
 
   const url = URL.createObjectURL(blob);
