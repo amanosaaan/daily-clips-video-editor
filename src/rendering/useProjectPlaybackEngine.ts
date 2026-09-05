@@ -145,6 +145,14 @@ export function useProjectPlaybackEngine(
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
 
+  // UI表示用のcurrentTimeMsDisplay(rAFループとは別に、~66ms間隔で確実に更新される
+  // 既存の仕組み)から導出する現在シーン番号。下の先読み/解放effectのトリガーに使う。
+  // rAFループの実行タイミングに依存せず、React effectの通常の再レンダーの仕組みで
+  // 確実に発火する(以前のウィンドウ方式がrAFの発火状況に挙動が左右されて不安定
+  // だった反省を踏まえた設計)。
+  const currentPosition = project ? resolvePosition(project, currentTimeMsDisplay) : null;
+  const currentSceneIndex = currentPosition?.sceneIndex ?? 0;
+
   // 動画要素を実際にDOMへ配置しておく置き場所（非表示）。
   // detached な <video> のまま drawImage で毎フレーム読むと、ブラウザが
   // オフスクリーン扱いにしてデコードを間引き、再生がカクつくことがあるため。
@@ -239,13 +247,22 @@ export function useProjectPlaybackEngine(
     }
   }, [project]);
 
-  // 全シーンで参照されている動画/画像/音声を読み込んでおく（シーン境界をまたぐ再生を
-  // 途切れさせないため。動画編集アプリ２と同じ、シンプルな全件先読み方式）。
-  // 以前この部分を「現在のシーン前後だけを読み込むウィンドウ方式」に変更したことがあるが、
-  // シーンが切り替わるタイミングでの読み込み/解放のレース(rAFの発火状況に挙動が
-  // 左右される等)により、かえって「シークすると再生できない」不具合を生んでしまった。
-  // 動画3本程度なら全件読み込みでも大抵の端末で問題にならない一方、都度の読み込み待ちが
-  // 無くなる分シンプルで安定するため、元の方式に戻している。
+  // 現在のシーンの前後1シーン分(計3シーン)で使われている動画/画像/音声だけを読み込み、
+  // ウィンドウの外に出たものは解放する。
+  //
+  // 以前は「動画編集アプリ２と同じ、シンプルな全件先読み方式」(全シーン分を常に
+  // 一括で読み込む)を採用していたが、これは動画3本程度の小規模プロジェクトを前提と
+  // した設計であり、数十本規模の一括取り込みプロジェクトでは同時に開く<video>/<audio>
+  // 要素の数が端末の実際の同時デコード可能数を超え、ほぼ全てが読み込みタイムアウトに
+  // なる不具合が実機で確認された(書き出し側で同じ理由の不具合が起き、シーン単位の
+  // ウィンドウ方式で解決できた実績があり、同じ考え方をここにも適用した)。
+  //
+  // 以前一度ウィンドウ方式を試みて「シークすると再生できない」不具合を起こし全件方式に
+  // 戻した経緯があるが、その際の原因は「ウィンドウの再計算をrAFループの実行タイミングに
+  // 依存させていた」ことだったと考えられる(rAFは非表示タブ等で発火が遅延・停止する
+  // ことがある)。今回はrAFループとは独立した、currentTimeMsDisplay(UIの現在時刻表示にも
+  // 使っている、通常のReact effectの仕組みで確実に更新される値)から導出したシーン番号を
+  // 依存配列に使うことで、この問題を避けている。
   useEffect(() => {
     if (!project) return;
 
@@ -336,12 +353,47 @@ export function useProjectPlaybackEngine(
       audioAssetsRef.current.set(mediaId, audio);
     }
 
-    // 一括取り込み中はファイルが追加されるたびにこのeffectが再実行されるが、
-    // 既に読み込み中(loadingMediaIdsRef)のmediaIdは再度着手しない。これにより、
-    // 前回のeffect実行で開始した読み込みが「古い実行」として中断されることなく
-    // 最後まで完了できる(loadingMediaIdsRefの説明コメント参照)。
-    for (const scene of project.scenes) {
-      for (const layer of scene.layers) {
+    const windowSceneIndices = [currentSceneIndex - 1, currentSceneIndex, currentSceneIndex + 1].filter(
+      (i) => i >= 0 && i < project.scenes.length,
+    );
+    const neededMediaIds = new Set<string>();
+    const neededAudioIds = new Set<string>();
+    for (const idx of windowSceneIndices) {
+      for (const layer of project.scenes[idx].layers) {
+        if (layer.type === 'video' || layer.type === 'image') neededMediaIds.add(layer.mediaId);
+        if (layer.type === 'audio') neededAudioIds.add(layer.mediaId);
+      }
+    }
+
+    // ウィンドウの外に出た(前後1シーンより遠くなった)素材は解放する。まだ読み込み中
+    // (loadingMediaIdsRef)のものは、完了時にassetsRefへ入った時点で次回のeffect実行時に
+    // 改めて解放されるので、ここで特別扱いする必要はない。
+    for (const [mediaId, el] of assetsRef.current) {
+      if (neededMediaIds.has(mediaId)) continue;
+      if (el instanceof HTMLVideoElement) {
+        el.pause();
+        el.removeAttribute('src');
+        el.load();
+        el.remove();
+      }
+      assetsRef.current.delete(mediaId);
+    }
+    for (const [mediaId, el] of audioAssetsRef.current) {
+      if (neededAudioIds.has(mediaId)) continue;
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+      el.remove();
+      audioAssetsRef.current.delete(mediaId);
+    }
+
+    // ウィンドウ内でまだ読み込んでいない素材を読み込む。一括取り込み中はファイルが
+    // 追加されるたびにこのeffectが再実行されるが、既に読み込み中(loadingMediaIdsRef)の
+    // mediaIdは再度着手しない。これにより、前回のeffect実行で開始した読み込みが
+    // 「古い実行」として中断されることなく最後まで完了できる
+    // (loadingMediaIdsRefの説明コメント参照)。
+    for (const idx of windowSceneIndices) {
+      for (const layer of project.scenes[idx].layers) {
         if (layer.type !== 'video' && layer.type !== 'image' && layer.type !== 'audio') continue;
         const mediaId = layer.mediaId;
         if (loadingMediaIdsRef.current.has(mediaId)) continue;
@@ -372,7 +424,7 @@ export function useProjectPlaybackEngine(
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project]);
+  }, [project, currentSceneIndex]);
 
   useEffect(() => {
     function loop(ts: number) {
@@ -572,7 +624,7 @@ export function useProjectPlaybackEngine(
     isPlaying,
     currentTimeMs: currentTimeMsDisplay,
     totalDurationMs: project ? getTotalDurationMs(project) : 0,
-    position: project ? resolvePosition(project, currentTimeMsDisplay) : null,
+    position: currentPosition,
     play,
     pause,
     seek,
