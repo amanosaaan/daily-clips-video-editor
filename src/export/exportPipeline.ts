@@ -244,10 +244,22 @@ async function createVideoFrameSource(mediaId: string): Promise<VideoFrameSource
   const blob = await getMediaBlob(mediaId);
   if (!blob) throw new Error('動画データが見つかりませんでした');
 
-  const viaMediabunny = await createMediabunnyVideoFrameSource(blob).catch((err) => {
-    console.warn('mediabunnyでの動画デコードに失敗したため、<video>要素にフォールバックします:', mediaId, err);
-    return null;
-  });
+  // mediabunnyのトラック確認(getPrimaryVideoTrack/canDecode)自体にはタイムアウトが
+  // 無いため、通常は一瞬で終わるはずのこの処理に短めの保険を掛けておく。ここを
+  // <video>要素フォールバック側の30秒タイムアウトと二重に(入れ子で)くくると、
+  // 外側のタイムアウトが内側の正当な待ち時間の途中で先に発火してしまいかねないため、
+  // 別々に、短い時間(この確認処理用)と長い時間(実際の読み込み用)で分けている。
+  const mediabunnyOutcome = await raceTimeout(
+    createMediabunnyVideoFrameSource(blob).catch((err) => {
+      console.warn('mediabunnyでの動画デコードに失敗したため、<video>要素にフォールバックします:', mediaId, err);
+      return null;
+    }),
+    10000,
+  );
+  const viaMediabunny = mediabunnyOutcome === 'timeout' ? null : mediabunnyOutcome;
+  if (mediabunnyOutcome === 'timeout') {
+    console.warn('mediabunnyでのトラック確認がタイムアウトしたため、<video>要素にフォールバックします:', mediaId);
+  }
   if (viaMediabunny) return viaMediabunny;
 
   console.warn(
@@ -469,11 +481,12 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
   async function ensureVideoFrameSource(mediaId: string): Promise<void> {
     if (videoFrameSources.has(mediaId)) return;
     try {
-      // mediabunnyのgetPrimaryVideoTrack()/canDecode()自体にはタイムアウトが
-      // 無いため、万一これが解決しない場合に書き出し全体が0%のまま止まって
-      // しまわないよう、ここでも保険を掛けておく(scheduleAudioSourceの
-      // decodeAudioDataタイムアウトと同じ理由)。
-      const outcome = await raceTimeout(createVideoFrameSource(mediaId), MEDIA_LOAD_TIMEOUT_MS);
+      // createVideoFrameSource内部では、mediabunnyのトラック確認(最大10秒)→
+      // 失敗時は<video>要素フォールバック(最大30秒、こちらは独自にタイムアウト済み)
+      // という流れになりうるため、この外側の安全弁は両方を合わせても収まるよう、
+      // MEDIA_LOAD_TIMEOUT_MSより長めに取っている(内側のタイムアウトが正当に
+      // 動作している途中で外側が先に発火してしまわないようにするため)。
+      const outcome = await raceTimeout(createVideoFrameSource(mediaId), MEDIA_LOAD_TIMEOUT_MS + 15000);
       if (outcome === 'timeout') throw new Error('動画フレームの読み込みがタイムアウトしました');
       videoFrameSources.set(mediaId, outcome);
       assets.set(mediaId, outcome.canvas);
@@ -491,6 +504,28 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
       source.dispose();
       videoFrameSources.delete(mediaId);
       assets.delete(mediaId);
+    }
+  }
+
+  // 読み込み(ensureVideoFrameSource)自体は成功しても、その後の毎フレームのseek()が
+  // 特定のファイルで想定外に長時間かかる/解決しないケースが実機で確認された
+  // (書き出しの進捗が特定のパーセントから一切進まなくなる)。原因を完全には特定
+  // できていないため、個々のseek()呼び出しにも安全弁を掛けておく。タイムアウトした
+  // 場合はそのフレームでは前回描画した内容のまま(canvas上は更新されない)進める
+  // (書き出し全体を止めないことを優先する)。一度タイムアウトした動画は、以降ずっと
+  // 同じ調子で毎フレーム5秒ずつ無駄に待つと書き出し全体が極端に遅くなるため、
+  // その動画へのseek自体を以降スキップするようにする(残りのフレームは前回の内容の
+  // まま=静止画のようになるが、書き出しは現実的な時間で完了する)。
+  const seekTimeoutMediaIds = new Set<string>();
+  async function safeSeek(source: VideoFrameSource, mediaId: string, timeSec: number): Promise<void> {
+    if (seekTimeoutMediaIds.has(mediaId)) return;
+    const outcome = await raceTimeout(source.seek(timeSec), 5000);
+    if (outcome === 'timeout') {
+      seekTimeoutMediaIds.add(mediaId);
+      console.error(
+        'この動画のシーク処理がタイムアウトしました(以降このクリップは前回の内容のまま進めます。書き出し自体は継続します):',
+        mediaId,
+      );
     }
   }
 
@@ -533,7 +568,7 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
         for (const layer of scene.layers) {
           if (layer.type === 'video') {
             const source = videoFrameSources.get(layer.mediaId);
-            if (source) await source.seek((layer.trimStart + localTimeMs) / 1000);
+            if (source) await safeSeek(source, layer.mediaId, (layer.trimStart + localTimeMs) / 1000);
           }
         }
 
@@ -542,7 +577,7 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
           for (const layer of nextScene.layers) {
             if (layer.type === 'video') {
               const source = videoFrameSources.get(layer.mediaId);
-              if (source) await source.seek(layer.trimStart / 1000);
+              if (source) await safeSeek(source, layer.mediaId, layer.trimStart / 1000);
             }
           }
           const progress = 1 - remainingInSceneMs / transition.durationMs;
