@@ -21,6 +21,17 @@ import { getMediaBlob, getMediaObjectUrl } from '../storage/mediaRepository';
 import { drawSceneFrame, drawTransitionFrame, type ResolvedAssetMap } from '../rendering/compositor';
 import { runExclusiveVideoDecode } from '../utils/videoDecodeQueue';
 
+function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'> {
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => resolve('timeout'), ms);
+    promise.then((value) => {
+      window.clearTimeout(timer);
+      resolve(value);
+    });
+  });
+}
+const MEDIA_LOAD_TIMEOUT_MS = 30000;
+
 export type ExportQuality = 'low' | 'medium' | 'high' | 'veryHigh';
 
 const QUALITY_PRESETS: Record<ExportQuality, Quality> = {
@@ -48,22 +59,26 @@ export interface ExportOptions {
  * (WebCodecsベースの自前デマルチプレクサ/デコーダー)のVideoSampleSinkで直接
  * フレームを取り出す方式に変更した。<video>要素・DOM挿入・シークイベント待ちを
  * 一切使わないため、上記の問題を構造的に回避できる。
+ *
+ * ただし、WebCodecsが正式にサポートするコーデックの範囲は<video>要素(ブラウザの
+ * メディア再生パイプライン)が再生できる範囲より狭いことがあり、実機で「This video
+ * track cannot be decoded by this browser」というmediabunny側のエラーで書き出し
+ * 全体が失敗する不具合が確認された。そのため、mediabunnyでデコード不可能と判定された
+ * 動画だけは、以前使っていた<video>要素方式にフォールバックする(両対応)。
  */
-type VideoFrameSource = {
+interface VideoFrameSource {
   /** 直近のフレームを描き込んだcanvas。compositor.tsへはこれを渡す(<video>要素の代わり)。 */
   canvas: HTMLCanvasElement;
-  sink: VideoSampleSink;
-  input: Input;
-  currentSample: VideoSample | null;
-  currentTimestampSec: number | null;
-};
+  seek(timeSec: number): Promise<void>;
+  dispose(): void;
+}
 
-async function createVideoFrameSource(blob: Blob): Promise<VideoFrameSource> {
+async function createMediabunnyVideoFrameSource(blob: Blob): Promise<VideoFrameSource | null> {
   const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
   const track = await input.getPrimaryVideoTrack();
-  if (!track) {
+  if (!track || !(await track.canDecode())) {
     input.dispose();
-    throw new Error('動画トラックが見つかりませんでした');
+    return null;
   }
   // 回転メタデータを反映した「表示上の」幅・高さ(<video>要素のvideoWidth/videoHeightに相当)。
   const displayWidth = await track.getDisplayWidth();
@@ -72,25 +87,130 @@ async function createVideoFrameSource(blob: Blob): Promise<VideoFrameSource> {
   canvas.width = Math.max(1, Math.round(displayWidth));
   canvas.height = Math.max(1, Math.round(displayHeight));
   const sink = new VideoSampleSink(track);
-  return { canvas, sink, input, currentSample: null, currentTimestampSec: null };
+  let currentSample: VideoSample | null = null;
+  let currentTimestampSec: number | null = null;
+
+  return {
+    canvas,
+    async seek(timeSec) {
+      const clamped = Math.max(0, timeSec);
+      if (currentTimestampSec !== null && Math.abs(currentTimestampSec - clamped) < 0.0005) return;
+      const sample = await sink.getSample(clamped);
+      if (!sample) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      sample.draw(ctx, 0, 0, canvas.width, canvas.height);
+      currentSample?.close();
+      currentSample = sample;
+      currentTimestampSec = clamped;
+    },
+    dispose() {
+      currentSample?.close();
+      input.dispose();
+    },
+  };
 }
 
-async function seekVideoFrameSource(source: VideoFrameSource, timeSec: number): Promise<void> {
-  const clamped = Math.max(0, timeSec);
-  if (source.currentTimestampSec !== null && Math.abs(source.currentTimestampSec - clamped) < 0.0005) return;
-  const sample = await source.sink.getSample(clamped);
-  if (!sample) return;
-  const ctx = source.canvas.getContext('2d');
-  if (!ctx) return;
-  sample.draw(ctx, 0, 0, source.canvas.width, source.canvas.height);
-  source.currentSample?.close();
-  source.currentSample = sample;
-  source.currentTimestampSec = clamped;
+// mediabunny(WebCodecs)でデコードできない動画専用の、<video>要素ベースのフォールバック。
+// 非表示コンテナに実体を置く・play()で明示的に読み込みを促す・rVFC優先でシークする、
+// といった対策は、いずれも実機での不具合調査を経て必要だと判明したもの
+// (mediaRepository.ts/useProjectPlaybackEngine.tsと同じ理由)。
+let hiddenExportFallbackContainer: HTMLDivElement | null = null;
+function getHiddenExportFallbackContainer(): HTMLDivElement {
+  if (!hiddenExportFallbackContainer) {
+    const container = document.createElement('div');
+    container.style.position = 'fixed';
+    container.style.left = '0';
+    container.style.top = '0';
+    container.style.width = '2px';
+    container.style.height = '2px';
+    container.style.overflow = 'hidden';
+    container.style.opacity = '0.01';
+    container.style.zIndex = '-1';
+    container.style.pointerEvents = 'none';
+    container.setAttribute('aria-hidden', 'true');
+    document.body.appendChild(container);
+    hiddenExportFallbackContainer = container;
+  }
+  return hiddenExportFallbackContainer;
 }
 
-function disposeVideoFrameSource(source: VideoFrameSource): void {
-  source.currentSample?.close();
-  source.input.dispose();
+async function createVideoElementFrameSource(url: string): Promise<VideoFrameSource> {
+  const video = document.createElement('video');
+  video.muted = true;
+  video.playsInline = true;
+  video.preload = 'auto';
+  getHiddenExportFallbackContainer().appendChild(video);
+  video.src = url;
+  await runExclusiveVideoDecode(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const timer = window.setTimeout(() => reject(new Error('動画の読み込みがタイムアウトしました')), MEDIA_LOAD_TIMEOUT_MS);
+        video.onloadeddata = () => {
+          window.clearTimeout(timer);
+          video.pause();
+          resolve();
+        };
+        video.onerror = () => {
+          window.clearTimeout(timer);
+          reject(new Error('動画の読み込みに失敗しました'));
+        };
+        video.play().catch(() => {});
+      }),
+  );
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, video.videoWidth);
+  canvas.height = Math.max(1, video.videoHeight);
+  const useFrameCallback = typeof video.requestVideoFrameCallback === 'function';
+
+  return {
+    canvas,
+    async seek(timeSec) {
+      const clamped = Math.max(0, Math.min(timeSec, video.duration || timeSec));
+      if (Math.abs(video.currentTime - clamped) >= 0.001) {
+        await raceTimeout(
+          new Promise<void>((resolve) => {
+            const onSeeked = () => resolve();
+            if (useFrameCallback) {
+              video.requestVideoFrameCallback(() => resolve());
+            } else {
+              video.addEventListener('seeked', onSeeked, { once: true });
+            }
+            video.currentTime = clamped;
+          }),
+          useFrameCallback ? 2000 : 1000,
+        );
+      }
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    },
+    dispose() {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      video.remove();
+    },
+  };
+}
+
+async function createVideoFrameSource(mediaId: string): Promise<VideoFrameSource> {
+  const blob = await getMediaBlob(mediaId);
+  if (!blob) throw new Error('動画データが見つかりませんでした');
+
+  const viaMediabunny = await createMediabunnyVideoFrameSource(blob).catch((err) => {
+    console.warn('mediabunnyでの動画デコードに失敗したため、<video>要素にフォールバックします:', mediaId, err);
+    return null;
+  });
+  if (viaMediabunny) return viaMediabunny;
+
+  console.warn(
+    'この動画はWebCodecsでデコードできない形式のため、<video>要素方式にフォールバックします(書き出し結果のカクつき/低速化が起きやすい可能性があります):',
+    mediaId,
+  );
+  const url = await getMediaObjectUrl(mediaId);
+  if (!url) throw new Error('動画URLが取得できませんでした');
+  return createVideoElementFrameSource(url);
 }
 
 async function loadImageElement(url: string): Promise<HTMLImageElement> {
@@ -285,11 +405,16 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
     for (const scene of project.scenes) {
       for (const layer of scene.layers) {
         if (layer.type === 'video' && !videoFrameSources.has(layer.mediaId)) {
-          const blob = await getMediaBlob(layer.mediaId);
-          if (!blob) continue;
-          const source = await createVideoFrameSource(blob);
-          videoFrameSources.set(layer.mediaId, source);
-          assets.set(layer.mediaId, source.canvas);
+          try {
+            const source = await createVideoFrameSource(layer.mediaId);
+            videoFrameSources.set(layer.mediaId, source);
+            assets.set(layer.mediaId, source.canvas);
+          } catch (err) {
+            // mediabunny/<video>要素のどちらでも読み込めなかった場合、この動画レイヤーは
+            // 書き出し結果に映らなくなるが、書き出し自体は続ける(1本のせいで全体が
+            // 失敗するのを避けるため。デコード不可の原因を追えるようログは残す)。
+            console.error('この動画は書き出し用にデコードできませんでした(このレイヤーは書き出し結果に含まれません):', layer.mediaId, err);
+          }
         } else if (layer.type === 'image' && !assets.has(layer.mediaId)) {
           const url = await getMediaObjectUrl(layer.mediaId);
           if (!url) continue;
@@ -313,7 +438,7 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
         for (const layer of scene.layers) {
           if (layer.type === 'video') {
             const source = videoFrameSources.get(layer.mediaId);
-            if (source) await seekVideoFrameSource(source, (layer.trimStart + localTimeMs) / 1000);
+            if (source) await source.seek((layer.trimStart + localTimeMs) / 1000);
           }
         }
 
@@ -322,7 +447,7 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
           for (const layer of nextScene.layers) {
             if (layer.type === 'video') {
               const source = videoFrameSources.get(layer.mediaId);
-              if (source) await seekVideoFrameSource(source, layer.trimStart / 1000);
+              if (source) await source.seek(layer.trimStart / 1000);
             }
           }
           const progress = 1 - remainingInSceneMs / transition.durationMs;
@@ -355,7 +480,7 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
     // 成功/失敗に関わらず必ず解放する(放置するとデコーダーリソースが残り続け、
     // 次回以降の書き出しに影響する恐れがある)。
     for (const source of videoFrameSources.values()) {
-      disposeVideoFrameSource(source);
+      source.dispose();
     }
   }
 
