@@ -89,10 +89,28 @@ interface VideoFrameSource {
   dispose(): void;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+// canDecode()は実際にはコーデック自体は対応しているのに、他の処理(プレビューの裏読み込み
+// や他の動画のデコード)によるリソース競合で一時的にfalseを返すことがある実機での
+// 検証で確認された(同じファイルを他の処理と競合しない単独の状況で試すと確実にtrueを
+// 返すのに、実際のアプリ内では稀にfalseと判定され、不要に不安定な<video>要素の
+// フォールバックへ回ってしまっていた)。そのため、falseだった場合は少し待ってから
+// 数回だけ問い合わせ直す。
+async function canDecodeWithRetry(track: { canDecode(): Promise<boolean> }): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (await track.canDecode()) return true;
+    if (attempt < 2) await sleep(500);
+  }
+  return false;
+}
+
 async function createMediabunnyVideoFrameSource(blob: Blob): Promise<VideoFrameSource | null> {
   const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
   const track = await input.getPrimaryVideoTrack();
-  if (!track || !(await track.canDecode())) {
+  if (!track || !(await canDecodeWithRetry(track))) {
     input.dispose();
     return null;
   }
