@@ -233,6 +233,24 @@ async function createVideoElementFrameSource(url: string): Promise<VideoFrameSou
       }),
   );
 
+  // ブラウザがそもそも対応していないコーデック(HEVC/H.265等)の場合、<video>要素は
+  // エラーを出さず'loadeddata'まで発火させてしまうことがあるが、実際には映像が一切
+  // デコードされておらずvideoWidth/videoHeightが0のままになる(実機で確認済み:
+  // canPlayType()も空文字列を返す=ブラウザ側もそもそも非対応と自己申告している状態)。
+  // これに気づかず先に進むと、幅0の(実質空の)動画としてcanvasを作ってしまい、
+  // 書き出し結果に何も映らない、あるいは後続処理が想定外の状態で詰まる原因になる。
+  // ここで明示的にエラーとして扱い、呼び出し元に「この動画は書き出せない」と
+  // 判断させる(このレイヤーは書き出し結果から除外され、書き出し自体は継続する)。
+  if (video.videoWidth === 0 || video.videoHeight === 0) {
+    video.pause();
+    video.removeAttribute('src');
+    video.load();
+    video.remove();
+    throw new Error(
+      'この動画はブラウザが対応していないコーデック(HEVC/H.265等)の可能性があり、<video>要素でも実際にはデコードされませんでした(videoWidth/videoHeightが0)',
+    );
+  }
+
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, video.videoWidth);
   canvas.height = Math.max(1, video.videoHeight);

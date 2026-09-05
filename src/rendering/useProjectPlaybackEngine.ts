@@ -312,6 +312,13 @@ export function useProjectPlaybackEngine(
         ),
       );
       if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
+      // ブラウザがそもそも対応していないコーデック(HEVC/H.265等)の場合、<video>要素は
+      // エラーを出さず'loadeddata'まで発火させることがあるが、実際には映像が一切
+      // デコードされておらずvideoWidth/videoHeightが0のままになる(実機で確認済み)。
+      // これに気づかず素材として登録すると、プレビューに何も映らない原因になる。
+      else if (outcome === 'ok' && (video.videoWidth === 0 || video.videoHeight === 0)) {
+        reportMediaLoadError(mediaId, url, 'この端末/ブラウザが対応していないコーデック(HEVC/H.265等)の可能性があります(videoWidth/videoHeightが0)');
+      }
       assetsRef.current.set(mediaId, video);
     }
 
