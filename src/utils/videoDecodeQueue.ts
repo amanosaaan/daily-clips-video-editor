@@ -41,3 +41,17 @@ export function runExclusiveVideoDecode<T>(fn: () => Promise<T>): Promise<T> {
   });
   return result;
 }
+
+// 書き出し中は、プレビュー側(useProjectPlaybackEngine.ts)が裏で行っている先読みも
+// このキューを取り合ってしまい、書き出しが自分の番を待つだけで数分かかることが
+// 実機で確認された(このキューは1件あたり最大30秒強かかりうるため、プレビュー側が
+// 複数件詰まっていると書き出しはその後ろに並ばされる)。書き出し中はプレビュー側の
+// 新規の先読み開始を止めることで、この競合を減らす(既に開始済みのものが完了する
+// までは残るが、少なくとも新規の追加は防げる)。
+let exportInProgress = false;
+export function setExportInProgress(value: boolean): void {
+  exportInProgress = value;
+}
+export function isExportInProgress(): boolean {
+  return exportInProgress;
+}

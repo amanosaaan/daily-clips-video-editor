@@ -3,7 +3,7 @@ import { getTotalDurationMs, resolvePosition, type TimelinePosition } from '../d
 import type { Project } from '../domain/types';
 import { getMediaObjectUrl } from '../storage/mediaRepository';
 import { drawSceneFrame, drawTransitionFrame, type ResolvedAssetMap } from './compositor';
-import { runExclusiveVideoDecode } from '../utils/videoDecodeQueue';
+import { isExportInProgress, runExclusiveVideoDecode } from '../utils/videoDecodeQueue';
 
 export interface ProjectPlaybackEngine {
   isPlaying: boolean;
@@ -95,12 +95,23 @@ export function useProjectPlaybackEngine(
   const [currentTimeMsDisplay, setCurrentTimeMsDisplay] = useState(0);
   const [mediaLoadErrors, setMediaLoadErrors] = useState<Set<string>>(() => new Set());
   const mediaLoadErrorsRef = useRef<Set<string>>(new Set());
-  const reportMediaLoadError = useCallback((mediaId: string, url: string, detail: unknown) => {
-    console.error('素材の読み込み(デコード)に失敗しました。この端末/ブラウザが対応していない形式の可能性があります:', url, detail);
-    if (mediaLoadErrorsRef.current.has(mediaId)) return;
-    mediaLoadErrorsRef.current = new Set(mediaLoadErrorsRef.current).add(mediaId);
-    setMediaLoadErrors(mediaLoadErrorsRef.current);
-  }, []);
+  const reportMediaLoadError = useCallback(
+    (mediaId: string, url: string, detail: unknown) => {
+      // mediaId(内部の識別子)だけでは元のファイルが分からずユーザーが切り分けに
+      // 困るため、分かる場合は元のファイル名も一緒にログへ残す。
+      const name = project?.mediaLibrary.find((m) => m.id === mediaId)?.name;
+      console.error(
+        '素材の読み込み(デコード)に失敗しました。この端末/ブラウザが対応していない形式の可能性があります:',
+        name ? `${name} (${mediaId})` : mediaId,
+        url,
+        detail,
+      );
+      if (mediaLoadErrorsRef.current.has(mediaId)) return;
+      mediaLoadErrorsRef.current = new Set(mediaLoadErrorsRef.current).add(mediaId);
+      setMediaLoadErrors(mediaLoadErrorsRef.current);
+    },
+    [project],
+  );
   // タイムアウト(MEDIA_LOAD_TIMEOUT_MS)で一旦「失敗」扱いにした後、実際にはそれより遅れて
   // loadeddata/onloadが発火して読み込めていた、というケースの誤検知を取り消す
   // (video.onloadeddata等のハンドラはPromise解決後も外していないため、遅れて呼ばれうる)。
@@ -386,6 +397,12 @@ export function useProjectPlaybackEngine(
       el.remove();
       audioAssetsRef.current.delete(mediaId);
     }
+
+    // 書き出し中は、書き出し処理自身が同じ直列デコードキュー(videoDecodeQueue.ts)を
+    // 使っているため、プレビュー側で新規の先読みを始めると書き出しの順番待ちが
+    // 長くなってしまう(実機で書き出しが数分単位で足止めされる不具合として確認された)。
+    // 書き出し中は新規の先読み開始を見送る(既に読み込み中のものはそのまま継続)。
+    if (isExportInProgress()) return;
 
     // ウィンドウ内でまだ読み込んでいない素材を読み込む。一括取り込み中はファイルが
     // 追加されるたびにこのeffectが再実行されるが、既に読み込み中(loadingMediaIdsRef)の

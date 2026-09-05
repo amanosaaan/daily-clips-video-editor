@@ -19,7 +19,7 @@ import {
 import type { Project } from '../domain/types';
 import { getMediaBlob, getMediaObjectUrl } from '../storage/mediaRepository';
 import { drawSceneFrame, drawTransitionFrame, type ResolvedAssetMap } from '../rendering/compositor';
-import { runExclusiveVideoDecode } from '../utils/videoDecodeQueue';
+import { runExclusiveVideoDecode, setExportInProgress } from '../utils/videoDecodeQueue';
 
 function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'> {
   return new Promise((resolve, reject) => {
@@ -37,6 +37,16 @@ function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'>
   });
 }
 const MEDIA_LOAD_TIMEOUT_MS = 30000;
+
+// デバッグログにmediaId(内部の識別子、人間には読めないランダムな文字列)だけ出しても
+// ユーザーが「どのファイルのことか」分からず切り分けに困るため、元のファイル名も
+// 一緒に出せるようにする。exportProjectToMp4の最初にセットし、終了時にクリアする
+// (関数の引数として全箇所に通すより、このファイル内で完結する軽量な方法を優先した)。
+let mediaNameLookup: Map<string, string> | null = null;
+function describeMedia(mediaId: string): string {
+  const name = mediaNameLookup?.get(mediaId);
+  return name ? `${name} (${mediaId})` : mediaId;
+}
 
 export type ExportQuality = 'low' | 'medium' | 'high' | 'veryHigh';
 
@@ -251,20 +261,20 @@ async function createVideoFrameSource(mediaId: string): Promise<VideoFrameSource
   // 別々に、短い時間(この確認処理用)と長い時間(実際の読み込み用)で分けている。
   const mediabunnyOutcome = await raceTimeout(
     createMediabunnyVideoFrameSource(blob).catch((err) => {
-      console.warn('mediabunnyでの動画デコードに失敗したため、<video>要素にフォールバックします:', mediaId, err);
+      console.warn('mediabunnyでの動画デコードに失敗したため、<video>要素にフォールバックします:', describeMedia(mediaId), err);
       return null;
     }),
     10000,
   );
   const viaMediabunny = mediabunnyOutcome === 'timeout' ? null : mediabunnyOutcome;
   if (mediabunnyOutcome === 'timeout') {
-    console.warn('mediabunnyでのトラック確認がタイムアウトしたため、<video>要素にフォールバックします:', mediaId);
+    console.warn('mediabunnyでのトラック確認がタイムアウトしたため、<video>要素にフォールバックします:', describeMedia(mediaId));
   }
   if (viaMediabunny) return viaMediabunny;
 
   console.warn(
     'この動画はWebCodecsでデコードできない形式のため、<video>要素方式にフォールバックします(書き出し結果のカクつき/低速化が起きやすい可能性があります):',
-    mediaId,
+    describeMedia(mediaId),
   );
   const url = await getMediaObjectUrl(mediaId);
   if (!url) throw new Error('動画URLが取得できませんでした');
@@ -382,7 +392,7 @@ async function scheduleAudioSource(
   } catch (err) {
     console.warn(
       '標準のdecodeAudioDataに失敗したため、mediabunny経由でのデコードにフォールバックします(iPhoneカメラ動画のApple空間音声トラック等が原因の可能性):',
-      mediaId,
+      describeMedia(mediaId),
       err,
     );
   }
@@ -399,7 +409,7 @@ async function scheduleAudioSource(
   } catch (err) {
     // 音声デコードに失敗した場合はそのレイヤーを無音として扱う(書き出し自体は止めない)。
     // 原因(コーデック非対応等)を追えるよう詳細はコンソールに残しておく。
-    console.error('音声のデコードに失敗しました(このレイヤーは無音になります):', mediaId, err);
+    console.error('音声のデコードに失敗しました(このレイヤーは無音になります):', describeMedia(mediaId), err);
     return false;
   }
 }
@@ -440,6 +450,19 @@ async function buildProjectAudioBuffer(project: Project): Promise<AudioBuffer | 
 }
 
 export async function exportProjectToMp4(project: Project, options: ExportOptions = {}): Promise<Blob> {
+  mediaNameLookup = new Map(project.mediaLibrary.map((m) => [m.id, m.name]));
+  // 書き出し中はプレビュー側の裏読み込みが同じ直列デコードキューを取り合わないよう、
+  // 新規の先読み開始を止める(videoDecodeQueue.tsのコメント参照)。
+  setExportInProgress(true);
+  try {
+    return await exportProjectToMp4Inner(project, options);
+  } finally {
+    setExportInProgress(false);
+    mediaNameLookup = null;
+  }
+}
+
+async function exportProjectToMp4Inner(project: Project, options: ExportOptions): Promise<Blob> {
   const fps = options.fps ?? project.fps ?? 30;
   const quality = QUALITY_PRESETS[options.quality ?? 'high'];
   const { width, height } = project.resolution;
@@ -494,7 +517,7 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
       // mediabunny/<video>要素のどちらでも読み込めなかった場合、この動画レイヤーは
       // 書き出し結果に映らなくなるが、書き出し自体は続ける(1本のせいで全体が
       // 失敗するのを避けるため。デコード不可の原因を追えるようログは残す)。
-      console.error('この動画は書き出し用にデコードできませんでした(このレイヤーは書き出し結果に含まれません):', mediaId, err);
+      console.error('この動画は書き出し用にデコードできませんでした(このレイヤーは書き出し結果に含まれません):', describeMedia(mediaId), err);
     }
   }
 
@@ -524,7 +547,7 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
       seekTimeoutMediaIds.add(mediaId);
       console.error(
         'この動画のシーク処理がタイムアウトしました(以降このクリップは前回の内容のまま進めます。書き出し自体は継続します):',
-        mediaId,
+        describeMedia(mediaId),
       );
     }
   }
