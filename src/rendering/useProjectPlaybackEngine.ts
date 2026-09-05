@@ -121,6 +121,16 @@ export function useProjectPlaybackEngine(
   const isPlayingRef = useRef(false);
   const assetsRef = useRef<ResolvedAssetMap>(new Map());
   const audioAssetsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  // 一括取り込み中はファイルが追加されるたびにprojectが変わり、下の先読みeffectが
+  // 再実行される。以前はeffectの再実行のたびに進行中の読み込みを「古い実行」として
+  // 中断・破棄し、次のeffect実行でまた同じmediaIdを最初からやり直していたため、
+  // 大量ファイルの一括取り込み中は1本の動画すら読み込みが完了しないまま
+  // 中断→再試行を延々と繰り返し、共有の直列デコードキュー(videoDecodeQueue.ts)を
+  // 占有し続けて取り込み自体まで巻き込んでタイムアウトさせる不具合があった。
+  // このrefで「現在読み込み中のmediaId」を管理し、effectが再実行されても
+  // 進行中の読み込みは中断せず最後まで完了させ、新しいeffect実行はまだ着手して
+  // いないmediaIdだけを拾うようにする。
+  const loadingMediaIdsRef = useRef<Set<string>>(new Set());
   const rafRef = useRef<number | null>(null);
   const lastTsRef = useRef<number | null>(null);
   const lastUiSyncRef = useRef(0);
@@ -190,6 +200,7 @@ export function useProjectPlaybackEngine(
         el.remove();
       }
       audioAssetsRef.current = new Map();
+      loadingMediaIdsRef.current = new Set();
       mediaLoadErrorsRef.current = new Set();
       setMediaLoadErrors(mediaLoadErrorsRef.current);
     }
@@ -236,120 +247,130 @@ export function useProjectPlaybackEngine(
   // 動画3本程度なら全件読み込みでも大抵の端末で問題にならない一方、都度の読み込み待ちが
   // 無くなる分シンプルで安定するため、元の方式に戻している。
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      if (!project) return;
-      for (const scene of project.scenes) {
-        for (const layer of scene.layers) {
-          if ((layer.type === 'video' || layer.type === 'image') && !assetsRef.current.has(layer.mediaId)) {
-            const url = await getMediaObjectUrl(layer.mediaId);
-            if (!url || cancelled) continue;
-            if (layer.type === 'video') {
-              const video = document.createElement('video');
-              video.playsInline = true;
-              video.preload = 'auto';
-              // iOS/WebKitはpreload="auto"を額面通り尊重せず、実際のデータ取得/デコードを
-              // 開始しないことがある。ミュート状態でのplay()呼び出しはユーザー操作無しでも
-              // 許可されるため、これを「本当に読み込め」という明示的な合図として使う
-              // (実際の音量/ミュート状態は再生開始時にel.mutedへ改めて設定し直される)。
-              video.muted = true;
-              hiddenContainerRef.current?.appendChild(video);
-              video.src = url;
-              const mediaId = layer.mediaId;
-              // 複数の<video>要素が同時に実際のデコードを試みると、iOS/WebKitでは
-              // どちらもloadeddata/errorが永久に発火しなくなることが実機で繰り返し
-              // 確認されたため、実データの取得(play()呼び出し)はアプリ全体で1本ずつ
-              // 直列に行う(videoDecodeQueue.ts参照)。
-              const outcome = await runExclusiveVideoDecode(() =>
-                raceTimeout(
-                  new Promise<void>((resolve) => {
-                    video.onloadeddata = () => {
-                      video.pause();
-                      clearMediaLoadError(mediaId);
-                      resolve();
-                    };
-                    // video.error.codeでコーデック非対応(MEDIA_ERR_SRC_NOT_SUPPORTED=4)か
-                    // デコード失敗(MEDIA_ERR_DECODE=3)かなどが分かる。
-                    video.onerror = () => {
-                      reportMediaLoadError(mediaId, url, video.error);
-                      resolve();
-                    };
-                    video.play().catch(() => {});
-                  }),
-                  MEDIA_LOAD_TIMEOUT_MS,
-                ),
-              );
-              if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
-              if (!cancelled) assetsRef.current.set(mediaId, video);
-              else {
-                video.pause();
-                video.removeAttribute('src');
-                video.load();
-                video.remove();
-              }
-            } else {
-              const img = new Image();
-              img.src = url;
-              const mediaId = layer.mediaId;
-              const outcome = await raceTimeout(
-                new Promise<void>((resolve) => {
-                  img.onload = () => {
-                    clearMediaLoadError(mediaId);
-                    resolve();
-                  };
-                  img.onerror = (err) => {
-                    reportMediaLoadError(mediaId, url, err);
-                    resolve();
-                  };
-                }),
-                MEDIA_LOAD_TIMEOUT_MS,
-              );
-              if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
-              if (!cancelled) assetsRef.current.set(mediaId, img);
-            }
-          } else if (layer.type === 'audio' && !audioAssetsRef.current.has(layer.mediaId)) {
-            const url = await getMediaObjectUrl(layer.mediaId);
-            if (!url || cancelled) continue;
-            const audio = document.createElement('audio');
-            audio.preload = 'auto';
-            // 動画と同じ理由(iOS/WebKitがpreload="auto"を尊重しないことがある)で、
-            // ミュートしたplay()で実際の読み込みを明示的に促す。
-            audio.muted = true;
-            hiddenContainerRef.current?.appendChild(audio);
-            audio.src = url;
-            const mediaId = layer.mediaId;
-            const outcome = await runExclusiveVideoDecode(() =>
-              raceTimeout(
-                new Promise<void>((resolve) => {
-                  audio.onloadeddata = () => {
-                    audio.pause();
-                    clearMediaLoadError(mediaId);
-                    resolve();
-                  };
-                  audio.onerror = () => {
-                    reportMediaLoadError(mediaId, url, audio.error);
-                    resolve();
-                  };
-                  audio.play().catch(() => {});
-                }),
-                MEDIA_LOAD_TIMEOUT_MS,
-              ),
-            );
-            if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
-            if (!cancelled) audioAssetsRef.current.set(mediaId, audio);
-            else {
+    if (!project) return;
+
+    async function loadVideoAsset(mediaId: string, url: string): Promise<void> {
+      const video = document.createElement('video');
+      video.playsInline = true;
+      video.preload = 'auto';
+      // iOS/WebKitはpreload="auto"を額面通り尊重せず、実際のデータ取得/デコードを
+      // 開始しないことがある。ミュート状態でのplay()呼び出しはユーザー操作無しでも
+      // 許可されるため、これを「本当に読み込め」という明示的な合図として使う
+      // (実際の音量/ミュート状態は再生開始時にel.mutedへ改めて設定し直される)。
+      video.muted = true;
+      hiddenContainerRef.current?.appendChild(video);
+      video.src = url;
+      // 複数の<video>要素が同時に実際のデコードを試みると、iOS/WebKitでは
+      // どちらもloadeddata/errorが永久に発火しなくなることが実機で繰り返し
+      // 確認されたため、実データの取得(play()呼び出し)はアプリ全体で1本ずつ
+      // 直列に行う(videoDecodeQueue.ts参照)。
+      const outcome = await runExclusiveVideoDecode(() =>
+        raceTimeout(
+          new Promise<void>((resolve) => {
+            video.onloadeddata = () => {
+              video.pause();
+              clearMediaLoadError(mediaId);
+              resolve();
+            };
+            // video.error.codeでコーデック非対応(MEDIA_ERR_SRC_NOT_SUPPORTED=4)か
+            // デコード失敗(MEDIA_ERR_DECODE=3)かなどが分かる。
+            video.onerror = () => {
+              reportMediaLoadError(mediaId, url, video.error);
+              resolve();
+            };
+            video.play().catch(() => {});
+          }),
+          MEDIA_LOAD_TIMEOUT_MS,
+        ),
+      );
+      if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
+      assetsRef.current.set(mediaId, video);
+    }
+
+    async function loadImageAsset(mediaId: string, url: string): Promise<void> {
+      const img = new Image();
+      img.src = url;
+      const outcome = await raceTimeout(
+        new Promise<void>((resolve) => {
+          img.onload = () => {
+            clearMediaLoadError(mediaId);
+            resolve();
+          };
+          img.onerror = (err) => {
+            reportMediaLoadError(mediaId, url, err);
+            resolve();
+          };
+        }),
+        MEDIA_LOAD_TIMEOUT_MS,
+      );
+      if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
+      assetsRef.current.set(mediaId, img);
+    }
+
+    async function loadAudioAsset(mediaId: string, url: string): Promise<void> {
+      const audio = document.createElement('audio');
+      audio.preload = 'auto';
+      // 動画と同じ理由(iOS/WebKitがpreload="auto"を尊重しないことがある)で、
+      // ミュートしたplay()で実際の読み込みを明示的に促す。
+      audio.muted = true;
+      hiddenContainerRef.current?.appendChild(audio);
+      audio.src = url;
+      const outcome = await runExclusiveVideoDecode(() =>
+        raceTimeout(
+          new Promise<void>((resolve) => {
+            audio.onloadeddata = () => {
               audio.pause();
-              audio.removeAttribute('src');
-              audio.load();
-              audio.remove();
+              clearMediaLoadError(mediaId);
+              resolve();
+            };
+            audio.onerror = () => {
+              reportMediaLoadError(mediaId, url, audio.error);
+              resolve();
+            };
+            audio.play().catch(() => {});
+          }),
+          MEDIA_LOAD_TIMEOUT_MS,
+        ),
+      );
+      if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
+      audioAssetsRef.current.set(mediaId, audio);
+    }
+
+    // 一括取り込み中はファイルが追加されるたびにこのeffectが再実行されるが、
+    // 既に読み込み中(loadingMediaIdsRef)のmediaIdは再度着手しない。これにより、
+    // 前回のeffect実行で開始した読み込みが「古い実行」として中断されることなく
+    // 最後まで完了できる(loadingMediaIdsRefの説明コメント参照)。
+    for (const scene of project.scenes) {
+      for (const layer of scene.layers) {
+        if (layer.type !== 'video' && layer.type !== 'image' && layer.type !== 'audio') continue;
+        const mediaId = layer.mediaId;
+        if (loadingMediaIdsRef.current.has(mediaId)) continue;
+        if ((layer.type === 'video' || layer.type === 'image') && !assetsRef.current.has(mediaId)) {
+          loadingMediaIdsRef.current.add(mediaId);
+          void (async () => {
+            try {
+              const url = await getMediaObjectUrl(mediaId);
+              if (!url) return;
+              if (layer.type === 'video') await loadVideoAsset(mediaId, url);
+              else await loadImageAsset(mediaId, url);
+            } finally {
+              loadingMediaIdsRef.current.delete(mediaId);
             }
-          }
+          })();
+        } else if (layer.type === 'audio' && !audioAssetsRef.current.has(mediaId)) {
+          loadingMediaIdsRef.current.add(mediaId);
+          void (async () => {
+            try {
+              const url = await getMediaObjectUrl(mediaId);
+              if (!url) return;
+              await loadAudioAsset(mediaId, url);
+            } finally {
+              loadingMediaIdsRef.current.delete(mediaId);
+            }
+          })();
         }
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project]);
 
