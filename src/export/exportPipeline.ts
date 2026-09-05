@@ -22,12 +22,18 @@ import { drawSceneFrame, drawTransitionFrame, type ResolvedAssetMap } from '../r
 import { runExclusiveVideoDecode } from '../utils/videoDecodeQueue';
 
 function raceTimeout<T>(promise: Promise<T>, ms: number): Promise<T | 'timeout'> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => resolve('timeout'), ms);
-    promise.then((value) => {
-      window.clearTimeout(timer);
-      resolve(value);
-    });
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        window.clearTimeout(timer);
+        reject(err);
+      },
+    );
   });
 }
 const MEDIA_LOAD_TIMEOUT_MS = 30000;
@@ -353,8 +359,14 @@ async function scheduleAudioSource(
 
   try {
     const arrayBuffer = await blob.arrayBuffer();
-    const decoded = await offlineCtx.decodeAudioData(arrayBuffer);
-    return scheduleDecodedBuffer(offlineCtx, decoded, trimStartMs, volume, sceneStartMs, sceneDurationMs);
+    // decodeAudioDataは失敗時にすぐ例外を投げてくれる分には問題ないが、特定のファイルで
+    // 例外も発生も無いまま永久に解決しないことがあり、その場合ここでbuildProjectAudioBuffer
+    // 全体が止まり、書き出しが0%から一切進まなくなる不具合が実機で確認された
+    // (大量ファイル一括取り込みの用途では、1本でもこれに当たる確率が上がる)。
+    // 他の読み込み処理と同様にタイムアウトの保険を掛けておく。
+    const outcome = await raceTimeout(offlineCtx.decodeAudioData(arrayBuffer), MEDIA_LOAD_TIMEOUT_MS);
+    if (outcome === 'timeout') throw new Error('decodeAudioDataがタイムアウトしました');
+    return scheduleDecodedBuffer(offlineCtx, outcome, trimStartMs, volume, sceneStartMs, sceneDurationMs);
   } catch (err) {
     console.warn(
       '標準のdecodeAudioDataに失敗したため、mediabunny経由でのデコードにフォールバックします(iPhoneカメラ動画のApple空間音声トラック等が原因の可能性):',
@@ -364,9 +376,14 @@ async function scheduleAudioSource(
   }
 
   try {
-    return await runExclusiveVideoDecode(() =>
-      scheduleAudioSourceViaMediabunny(offlineCtx, blob, trimStartMs, volume, sceneStartMs, sceneDurationMs),
+    const outcome = await raceTimeout(
+      runExclusiveVideoDecode(() =>
+        scheduleAudioSourceViaMediabunny(offlineCtx, blob, trimStartMs, volume, sceneStartMs, sceneDurationMs),
+      ),
+      MEDIA_LOAD_TIMEOUT_MS,
     );
+    if (outcome === 'timeout') throw new Error('mediabunny経由の音声デコードがタイムアウトしました');
+    return outcome;
   } catch (err) {
     // 音声デコードに失敗した場合はそのレイヤーを無音として扱う(書き出し自体は止めない)。
     // 原因(コーデック非対応等)を追えるよう詳細はコンソールに残しておく。
@@ -446,9 +463,14 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
       for (const layer of scene.layers) {
         if (layer.type === 'video' && !videoFrameSources.has(layer.mediaId)) {
           try {
-            const source = await createVideoFrameSource(layer.mediaId);
-            videoFrameSources.set(layer.mediaId, source);
-            assets.set(layer.mediaId, source.canvas);
+            // mediabunnyのgetPrimaryVideoTrack()/canDecode()自体にはタイムアウトが
+            // 無いため、万一これが解決しない場合に書き出し全体が0%のまま止まって
+            // しまわないよう、ここでも保険を掛けておく(scheduleAudioSourceの
+            // decodeAudioDataタイムアウトと同じ理由)。
+            const outcome = await raceTimeout(createVideoFrameSource(layer.mediaId), MEDIA_LOAD_TIMEOUT_MS);
+            if (outcome === 'timeout') throw new Error('動画フレームの読み込みがタイムアウトしました');
+            videoFrameSources.set(layer.mediaId, outcome);
+            assets.set(layer.mediaId, outcome.canvas);
           } catch (err) {
             // mediabunny/<video>要素のどちらでも読み込めなかった場合、この動画レイヤーは
             // 書き出し結果に映らなくなるが、書き出し自体は続ける(1本のせいで全体が

@@ -15,13 +15,29 @@
  * loadedmetadataだけを待つ処理(moovボックスの解析のみで済み、実機のログ上も
  * 一貫して高速・安定していた)はこのキューを通す必要はない。
  */
+// 呼び出し元(mediaRepository.ts/useProjectPlaybackEngine.ts/exportPipeline.ts)は
+// 各タスク自身に(せいぜい数十秒の)タイムアウトを掛けているが、それでも稀に
+// タイムアウトの仕組みを持たない、あるいはタイムアウト自体が機能しない経路で
+// タスクが永久に解決しないことがあり得る。この場合、下のqueueがそのタスクの
+// 完了を待ち続けたままになり、以降にこのキューを使う「全ての」タスク(取り込み・
+// プレビュー先読み・書き出しなど)が無期限に足止めされてしまう
+// (実機で「書き出しボタンを押しても進捗0%のまま1時間以上動かない」不具合として
+// 確認された)。そのため、個々のタスクの完了を待たずとも、一定時間経過したら
+// キュー自体は強制的に先へ進めるようにする(その間だけ一時的に「排他」が崩れる
+// ことになるが、永久デッドロックよりは遥かにまし)。
+const QUEUE_ADVANCE_TIMEOUT_MS = 35000;
+
 let queue: Promise<void> = Promise.resolve();
 
 export function runExclusiveVideoDecode<T>(fn: () => Promise<T>): Promise<T> {
   const result = queue.then(fn, fn);
-  queue = result.then(
+  const settled = result.then(
     () => undefined,
     () => undefined,
   );
+  queue = new Promise<void>((resolve) => {
+    settled.then(resolve);
+    window.setTimeout(resolve, QUEUE_ADVANCE_TIMEOUT_MS);
+  });
   return result;
 }
