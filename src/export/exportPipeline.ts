@@ -457,27 +457,48 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
   const assets: ResolvedAssetMap = new Map();
   const videoFrameSources = new Map<string, VideoFrameSource>();
 
+  // 動画1本ごとにmediabunnyのInput/VideoSampleSink(WebCodecsデコーダー)を開くため、
+  // 大量ファイルの一括取り込みで作った(数十本規模の)プロジェクトを全シーン分まとめて
+  // 先読みすると、同時に開くデコーダーの数が端末の実際の同時デコード可能数を超え、
+  // canDecode()が(コーデック非対応ではなく単なるリソース不足で)falseを返したり、
+  // 読み込み自体がタイムアウトしたりする不具合が実機で確認された(iOS固有ではなく、
+  // PCの大量ファイル一括取り込みでも発生)。そのため動画だけは全件先読みをやめ、
+  // 「今処理中のシーン」+「トランジションで必要な次のシーン」の分だけをその都度
+  // 開き、不要になった時点ですぐ解放する方式に変更した(画像は軽いため従来通り
+  // 全件先読みのままで問題ない)。
+  async function ensureVideoFrameSource(mediaId: string): Promise<void> {
+    if (videoFrameSources.has(mediaId)) return;
+    try {
+      // mediabunnyのgetPrimaryVideoTrack()/canDecode()自体にはタイムアウトが
+      // 無いため、万一これが解決しない場合に書き出し全体が0%のまま止まって
+      // しまわないよう、ここでも保険を掛けておく(scheduleAudioSourceの
+      // decodeAudioDataタイムアウトと同じ理由)。
+      const outcome = await raceTimeout(createVideoFrameSource(mediaId), MEDIA_LOAD_TIMEOUT_MS);
+      if (outcome === 'timeout') throw new Error('動画フレームの読み込みがタイムアウトしました');
+      videoFrameSources.set(mediaId, outcome);
+      assets.set(mediaId, outcome.canvas);
+    } catch (err) {
+      // mediabunny/<video>要素のどちらでも読み込めなかった場合、この動画レイヤーは
+      // 書き出し結果に映らなくなるが、書き出し自体は続ける(1本のせいで全体が
+      // 失敗するのを避けるため。デコード不可の原因を追えるようログは残す)。
+      console.error('この動画は書き出し用にデコードできませんでした(このレイヤーは書き出し結果に含まれません):', mediaId, err);
+    }
+  }
+
+  function releaseUnneededVideoFrameSources(neededMediaIds: Set<string>): void {
+    for (const [mediaId, source] of videoFrameSources) {
+      if (neededMediaIds.has(mediaId)) continue;
+      source.dispose();
+      videoFrameSources.delete(mediaId);
+      assets.delete(mediaId);
+    }
+  }
+
   try {
-    // トランジションで次シーンの素材も必要になるため、全シーン分を先に読み込んでおく
+    // 画像は動画と違ってデコーダーのリソース制約が無いため、従来通り全件先読みする。
     for (const scene of project.scenes) {
       for (const layer of scene.layers) {
-        if (layer.type === 'video' && !videoFrameSources.has(layer.mediaId)) {
-          try {
-            // mediabunnyのgetPrimaryVideoTrack()/canDecode()自体にはタイムアウトが
-            // 無いため、万一これが解決しない場合に書き出し全体が0%のまま止まって
-            // しまわないよう、ここでも保険を掛けておく(scheduleAudioSourceの
-            // decodeAudioDataタイムアウトと同じ理由)。
-            const outcome = await raceTimeout(createVideoFrameSource(layer.mediaId), MEDIA_LOAD_TIMEOUT_MS);
-            if (outcome === 'timeout') throw new Error('動画フレームの読み込みがタイムアウトしました');
-            videoFrameSources.set(layer.mediaId, outcome);
-            assets.set(layer.mediaId, outcome.canvas);
-          } catch (err) {
-            // mediabunny/<video>要素のどちらでも読み込めなかった場合、この動画レイヤーは
-            // 書き出し結果に映らなくなるが、書き出し自体は続ける(1本のせいで全体が
-            // 失敗するのを避けるため。デコード不可の原因を追えるようログは残す)。
-            console.error('この動画は書き出し用にデコードできませんでした(このレイヤーは書き出し結果に含まれません):', layer.mediaId, err);
-          }
-        } else if (layer.type === 'image' && !assets.has(layer.mediaId)) {
+        if (layer.type === 'image' && !assets.has(layer.mediaId)) {
           const url = await getMediaObjectUrl(layer.mediaId);
           if (!url) continue;
           assets.set(layer.mediaId, await loadImageElement(url));
@@ -493,6 +514,18 @@ export async function exportProjectToMp4(project: Project, options: ExportOption
       const scene = project.scenes[sceneIndex];
       const nextScene = project.scenes[sceneIndex + 1];
       const transition = scene.transitionOut;
+
+      // このシーンの再生に必要な動画(このシーン自身+トランジションがあれば次シーン分)
+      // だけを用意し、それ以外(前のシーンで使っていたもの等)は解放する。
+      const neededMediaIds = new Set<string>();
+      for (const layer of scene.layers) if (layer.type === 'video') neededMediaIds.add(layer.mediaId);
+      if (transition && nextScene) {
+        for (const layer of nextScene.layers) if (layer.type === 'video') neededMediaIds.add(layer.mediaId);
+      }
+      releaseUnneededVideoFrameSources(neededMediaIds);
+      for (const mediaId of neededMediaIds) {
+        await ensureVideoFrameSource(mediaId);
+      }
 
       const sceneFrameCount = Math.max(1, Math.round((scene.duration / 1000) * fps));
       for (let f = 0; f < sceneFrameCount; f++) {
