@@ -90,12 +90,50 @@ async function createMediabunnyVideoFrameSource(blob: Blob): Promise<VideoFrameS
   let currentSample: VideoSample | null = null;
   let currentTimestampSec: number | null = null;
 
+  // 書き出しは1シーン内ではフレーム順(昇順)にしかseekしないため、毎回getSample()で
+  // 個別に探しに行くより、sink.samples()の連続イテレーターを使い回した方がずっと速い
+  // (mediabunny曰く「パケットを1回しかデコードしない最適化されたパイプライン」)。
+  // トランジションや別mediaIdへの切り替えで時刻が後退・大きく飛ぶ場合だけ、その時刻から
+  // イテレーターを取り直す。getSample()と同じ「指定時刻以下で一番近いサンプル」という
+  // 意味を保つため、先読みしたサンプルが指定時刻を超えたところで確定させる。
+  let iterator: AsyncGenerator<VideoSample, void, unknown> | null = null;
+  let pending: VideoSample | null = null;
+  let lastResultTimestampSec: number | null = null;
+
+  async function getSampleAtOrBefore(targetSec: number): Promise<VideoSample | null> {
+    const needsRestart =
+      !iterator ||
+      (lastResultTimestampSec !== null && targetSec < lastResultTimestampSec) ||
+      (pending !== null && pending.timestamp > targetSec + 5);
+    if (needsRestart) {
+      void iterator?.return?.();
+      pending?.close();
+      pending = null;
+      iterator = sink.samples(targetSec);
+    }
+
+    let result: VideoSample | null = null;
+    for (;;) {
+      if (!pending) {
+        const next = await iterator!.next();
+        if (next.done || !next.value) break;
+        pending = next.value;
+      }
+      if (pending.timestamp > targetSec) break;
+      result?.close();
+      result = pending;
+      pending = null;
+    }
+    if (result) lastResultTimestampSec = result.timestamp;
+    return result;
+  }
+
   return {
     canvas,
     async seek(timeSec) {
       const clamped = Math.max(0, timeSec);
       if (currentTimestampSec !== null && Math.abs(currentTimestampSec - clamped) < 0.0005) return;
-      const sample = await sink.getSample(clamped);
+      const sample = await getSampleAtOrBefore(clamped);
       if (!sample) return;
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
@@ -106,6 +144,8 @@ async function createMediabunnyVideoFrameSource(blob: Blob): Promise<VideoFrameS
     },
     dispose() {
       currentSample?.close();
+      pending?.close();
+      void iterator?.return?.();
       input.dispose();
     },
   };
