@@ -1259,6 +1259,9 @@ button.editor__menubar-item[aria-expanded='true'] {
 .clip-bulk-import__progress-item {
   color: var(--text-secondary, var(--text));
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 320px;
 }
 
 .storyboard__header {

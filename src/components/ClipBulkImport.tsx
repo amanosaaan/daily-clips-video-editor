@@ -58,13 +58,16 @@ export function ClipBulkImport({ project }: Props) {
           <span>
             読み込み中: {progress.done} / {progress.total} 件
           </span>
-          {progress.active.map((file) => (
-            <span key={file.name} className="clip-bulk-import__progress-item">
-              {file.convertingRatio != null
-                ? `${file.name} を変換中… ${Math.round(file.convertingRatio * 100)}%`
-                : `${file.name} 処理中…`}
-            </span>
-          ))}
+          {/* 通常の処理は一瞬で終わるため個別表示すると(フォルダ一括追加等で)大量の行が
+              並んで画面を圧迫してしまう。時間の掛かるHEVC等の変換中ファイルだけ個別に
+              見せれば十分なので、それ以外は上の件数カウントだけに留める。 */}
+          {progress.active
+            .filter((file) => file.convertingRatio != null)
+            .map((file) => (
+              <span key={file.name} className="clip-bulk-import__progress-item">
+                {`${file.name} を変換中… ${Math.round(file.convertingRatio! * 100)}%`}
+              </span>
+            ))}
         </span>
       )}
       <input
