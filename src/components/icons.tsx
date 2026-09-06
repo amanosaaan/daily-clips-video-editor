@@ -33,6 +33,7 @@ import {
   ImageIcon as LucideImageIcon,
   Italic,
   Layers,
+  Mail,
   Minus,
   MousePointer2,
   MousePointerSquareDashed,
@@ -131,3 +132,4 @@ export const CalendarIcon = icon(Calendar);
 export const MosaicIcon = icon(Grid3x3);
 export const ChaptersIcon = icon(ListVideo);
 export const BugIcon = icon(Bug);
+export const MailIcon = icon(Mail);

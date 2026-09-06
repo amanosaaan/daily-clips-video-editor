@@ -10,6 +10,7 @@ import {
 import { getSceneStartMs } from '../domain/timeline';
 import type { ImageLayer, VideoLayer } from '../domain/types';
 import { exportProjectToMp4, type ExportQuality } from '../export/exportPipeline';
+import { sendCompletionEmail } from '../utils/emailNotify';
 import { shareOrDownloadVideo } from '../utils/exportShare';
 import { useProjectPlaybackEngine } from '../rendering/useProjectPlaybackEngine';
 import { addMediaFile } from '../storage/mediaRepository';
@@ -26,6 +27,7 @@ import {
   CopyIcon,
   ExpandIcon,
   ImageIcon,
+  MailIcon,
   MosaicIcon,
   MultiSelectIcon,
   PauseIcon,
@@ -42,6 +44,7 @@ import {
 import { ClipBulkImport } from './ClipBulkImport';
 import { LayerTimelinePanel } from './LayerTimelinePanel';
 import { MediaLibraryPanel } from './MediaLibraryPanel';
+import { NotifySettingsModal } from './NotifySettingsModal';
 import { PreviewPanel } from './PreviewPanel';
 import { SceneTimelineStrip } from './SceneTimelineStrip';
 
@@ -79,6 +82,7 @@ export function MobileEditorView() {
   const [exportedVideo, setExportedVideo] = useState<{ blob: Blob; filename: string } | null>(null);
   const [isArrangeOpen, setArrangeOpen] = useState(false);
   const [isMediaOpen, setMediaOpen] = useState(false);
+  const [isNotifySettingsOpen, setNotifySettingsOpen] = useState(false);
   const [croppingImageLayerId, setCroppingImageLayerId] = useState<string | null>(null);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [isTimingOpen, setTimingOpen] = useState(false);
@@ -135,9 +139,19 @@ export function MobileEditorView() {
       // 自動で保存を呼ぶのではなく、ユーザーが「保存する」ボタンを押した瞬間(新しい
       // ユーザー操作)にshareOrDownloadVideoを呼ぶよう変更した。
       setExportedVideo({ blob, filename: `${project.name || 'video'}.mp4` });
+      const notifyErr = await sendCompletionEmail(
+        '【デイリークリップス】書き出しが完了しました',
+        `「${project.name || '新しいプロジェクト'}」の書き出しが完了しました。アプリの画面に戻って保存してください。`,
+      );
+      if (notifyErr) console.error('完了通知メールの送信に失敗しました(書き出し自体は成功しています):', notifyErr);
     } catch (err) {
       console.error(err);
       window.alert('書き出しに失敗しました。ブラウザがMP4書き出しに対応していない可能性があります。');
+      const notifyErr = await sendCompletionEmail(
+        '【デイリークリップス】書き出しに失敗しました',
+        `「${project.name || '新しいプロジェクト'}」の書き出し中にエラーが発生しました。アプリの画面を確認してください。`,
+      );
+      if (notifyErr) console.error('失敗通知メールの送信にも失敗しました:', notifyErr);
     } finally {
       setExporting(false);
     }
@@ -203,6 +217,14 @@ export function MobileEditorView() {
         </button>
         <span className="mobile-editor__app-name">デイリークリップス</span>
         <div className="mobile-editor__top-right">
+          <button
+            className="mobile-icon-btn"
+            onClick={() => setNotifySettingsOpen(true)}
+            aria-label="メール通知設定"
+            title="メール通知設定"
+          >
+            <MailIcon size={18} />
+          </button>
           <select
             className="mobile-editor__quality-select"
             value={exportQuality}
@@ -363,6 +385,7 @@ export function MobileEditorView() {
       />
 
       {isMediaOpen && <MediaLibraryPanel project={project} scene={currentScene} onClose={() => setMediaOpen(false)} />}
+      {isNotifySettingsOpen && <NotifySettingsModal onClose={() => setNotifySettingsOpen(false)} />}
 
       {isArrangeOpen && (
         <BottomSheet

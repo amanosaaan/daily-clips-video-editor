@@ -1085,6 +1085,75 @@ button.editor__menubar-item[aria-expanded='true'] {
   flex-wrap: wrap;
 }
 
+.notify-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.notify-settings__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.notify-settings__row input {
+  margin-top: 2px;
+  flex-shrink: 0;
+}
+
+.notify-settings__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.notify-settings__field input {
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-app);
+  color: var(--text-h);
+}
+
+.notify-settings__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.notify-settings__status {
+  font-size: 12px;
+}
+
+.notify-settings__status--ok {
+  color: #2e8b57;
+}
+
+.notify-settings__status--error {
+  color: #d33;
+}
+
+.notify-settings__hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--text-muted, var(--text));
+  line-height: 1.6;
+}
+
+.notify-settings__hint code {
+  font-family: Consolas, monospace;
+  background: var(--bg-app);
+  padding: 1px 4px;
+  border-radius: 4px;
+}
+
 @media (max-width: 768px) {
   .media-flyout__backdrop {
     display: flex;
