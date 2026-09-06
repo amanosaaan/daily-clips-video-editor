@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import type { Project } from '../domain/types';
 import { useClipImport } from '../hooks/useClipImport';
 import { useProjectStore } from '../state/projectStore';
@@ -14,9 +14,18 @@ interface Props {
  */
 export function ClipBulkImport({ project }: Props) {
   const sortScenesByDate = useProjectStore((s) => s.sortScenesByDate);
-  const { importVideoFiles, importing, progress } = useClipImport(project);
+  const { importVideoFiles, importing, progress, codecWarnings } = useClipImport(project);
   const filesInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
+
+  // 取り込みが完了したタイミングで、H.264への自動変換が(それも含めて)失敗した動画が
+  // あればまとめて知らせる。プレビュー再生や書き出しで初めて気づくと分かりにくいため。
+  useEffect(() => {
+    if (codecWarnings.length === 0) return;
+    window.alert(
+      `次の動画は、この端末/ブラウザで再生できる形式への自動変換に失敗しました。書き出すと、これらの動画は映像が表示されず音声のみになります:\n\n${codecWarnings.join('\n')}`,
+    );
+  }, [codecWarnings]);
 
   return (
     <div className="clip-bulk-import">
@@ -46,7 +55,9 @@ export function ClipBulkImport({ project }: Props) {
       </button>
       {importing && progress && (
         <span className="clip-bulk-import__progress">
-          読み込み中: {progress.done} / {progress.total} 件
+          {progress.converting
+            ? `${progress.converting.name} を変換中… ${Math.round(progress.converting.ratio * 100)}%`
+            : `読み込み中: ${progress.done} / ${progress.total} 件`}
         </span>
       )}
       <input

@@ -1,8 +1,10 @@
 import { nanoid } from 'nanoid';
+import { ALL_FORMATS, BlobSource, Input } from 'mediabunny';
 import { db } from './db';
 import type { MediaAsset } from '../domain/types';
 import { readMp4CreationTime } from '../domain/videoMetadata';
 import { runExclusiveVideoDecode } from '../utils/videoDecodeQueue';
+import { convertToH264 } from '../utils/hevcConvert';
 
 const mediaUrlCache = new Map<string, string>();
 const thumbnailUrlCache = new Map<string, string>();
@@ -214,13 +216,58 @@ async function generateImageThumbnail(mediaId: string, url: string, width: numbe
   );
 }
 
+/**
+ * 実機検証で、HEVC(H.265)等ブラウザが対応していない映像コーデックの場合、
+ * <video>要素は'loadeddata'まで(エラーも出さず)発火させるのに実際には映像が
+ * 一切デコードされていない(videoWidth/videoHeightが0のまま)ことが判明した
+ * (exportPipeline.ts参照)。プレビュー再生や書き出し時になって初めて気づくのでは
+ * なく、取り込み時点でユーザーに知らせられるよう、mediabunny(WebCodecs)で
+ * デコード可否を確認しておく。ここでの結果はあくまで「参考の警告」であり、
+ * falseだったとしても動画自体の取り込みは通常通り続ける。
+ */
+async function checkCodecMaybeUnsupported(blob: Blob): Promise<boolean> {
+  const input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+  try {
+    const track = await input.getPrimaryVideoTrack();
+    if (!track) return false;
+    return !(await track.canDecode());
+  } catch {
+    return false;
+  } finally {
+    input.dispose();
+  }
+}
+
 export async function addMediaBlob(
   projectId: string,
   blob: Blob,
   name: string,
+  onConvertProgress?: (ratio: number) => void,
 ): Promise<MediaAsset> {
   const kind = detectKind(blob.type);
   const id = nanoid();
+
+  let codecMaybeUnsupported: boolean | undefined;
+  if (kind === 'video') {
+    codecMaybeUnsupported = await checkCodecMaybeUnsupported(blob);
+    if (codecMaybeUnsupported) {
+      console.warn(
+        'この動画の映像コーデックはこの端末/ブラウザではデコードできない可能性があります(HEVC/H.265等)。H.264への自動変換を試みます:',
+        name,
+      );
+      try {
+        const converted = await convertToH264(blob, onConvertProgress);
+        blob = converted;
+        codecMaybeUnsupported = false;
+        console.warn('HEVC等からH.264への自動変換に成功しました:', name);
+      } catch (err) {
+        // 変換にも失敗した場合、元のファイルのまま取り込みは続ける(codecMaybeUnsupported=
+        // trueのままにしておき、呼び出し元がユーザーへ警告できるようにする)。
+        console.error('H.264への自動変換に失敗しました(元のファイルのまま取り込みます):', name, err);
+      }
+    }
+  }
+
   // IndexedDBへの書き込みも、他タブが同じDBへの接続を握ったまま止まっている等の理由で
   // 稀に応答が返ってこないことがある。ここが詰まると一括取り込みが「次のファイルへ全く
   // 進まない(ボタンも反応しない)」ように見えてしまうため、他の読み込み処理と同様に
@@ -295,11 +342,16 @@ export async function addMediaBlob(
     thumbnailBlobId,
     shotDatetime,
     shotDateSource,
+    codecMaybeUnsupported,
   };
 }
 
-export async function addMediaFile(projectId: string, file: File): Promise<MediaAsset> {
-  return addMediaBlob(projectId, file, file.name);
+export async function addMediaFile(
+  projectId: string,
+  file: File,
+  onConvertProgress?: (ratio: number) => void,
+): Promise<MediaAsset> {
+  return addMediaBlob(projectId, file, file.name, onConvertProgress);
 }
 
 function getMediaObjectUrlFromBlob(mediaId: string, blob: Blob): string {

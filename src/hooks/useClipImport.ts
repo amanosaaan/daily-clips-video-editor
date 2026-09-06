@@ -6,6 +6,8 @@ import { useProjectStore } from '../state/projectStore';
 export interface ClipImportProgress {
   done: number;
   total: number;
+  /** HEVC等をH.264へ自動変換している最中の進捗(ffmpeg.wasm、時間が掛かるため表示用)。 */
+  converting?: { name: string; ratio: number };
 }
 
 // addMediaFile内部では、IndexedDB書き込み・動画メタデータ取得・サムネイル生成の
@@ -16,7 +18,13 @@ export interface ClipImportProgress {
 // 通常はここまで待たされることは無い想定。これが無いと、1ファイルでも詰まると
 // 「次のファイルへ進まない(ボタンも反応しない)」まま importing が true に張り付いてしまう
 // (既存のimportingで全ボタンを無効化するUIの副作用)。
-const IMPORT_FILE_TIMEOUT_MS = 100000;
+// HEVC等の自動変換(ffmpeg.wasm、ソフトウェアエンコード)は動画の長さ・解像度次第で
+// かなり時間が掛かる(実機検証では20秒程度の1080p動画で4〜5分程度掛かった)。
+// この用途(たまに届く数十秒〜数分程度の動画)であれば十分足りるよう、30分という
+// 大きめの値にしている(非常に長い動画では足りない可能性はあるが、その場合でも
+// 書き出し自体は諦めて元のファイルのまま取り込みを続けるだけで、アプリ全体が
+// 止まったままになることはない)。
+const IMPORT_FILE_TIMEOUT_MS = 1800000;
 function withImportTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error('ファイルの取り込みがタイムアウトしました')), ms);
@@ -46,6 +54,10 @@ export function useClipImport(project: Project | null) {
   const removeScene = useProjectStore((s) => s.removeScene);
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState<ClipImportProgress | null>(null);
+  // 取り込んだ動画の中に、この端末/ブラウザでは映像コーデックがデコードできない
+  // 可能性がある(HEVC/H.265等)ものが無かったか。プレビュー再生や書き出しで
+  // 初めて気づくのではなく、取り込み直後にユーザーへ知らせるためのもの。
+  const [codecWarnings, setCodecWarnings] = useState<string[]>([]);
 
   async function importVideoFiles(files: FileList | File[] | null): Promise<void> {
     if (!files || !project) return;
@@ -54,6 +66,8 @@ export function useClipImport(project: Project | null) {
 
     setImporting(true);
     setProgress({ done: 0, total: videoFiles.length });
+    setCodecWarnings([]);
+    const newCodecWarnings: string[] = [];
     // importingがtrueのままだと「追加」ボタン等が無効化されっぱなしになり、次のファイルを
     // 選ぶことすらできなくなる(disabledなボタンはクリックしても無反応に見える)。
     // ループ内の想定外のエラーだけでなく、ループの外(並び替え処理等)で何か起きた場合でも
@@ -61,9 +75,17 @@ export function useClipImport(project: Project | null) {
     try {
       for (let i = 0; i < videoFiles.length; i++) {
         try {
-          const asset = await withImportTimeout(addMediaFile(project.id, videoFiles[i]), IMPORT_FILE_TIMEOUT_MS);
+          const name = videoFiles[i].name;
+          const onConvertProgress = (ratio: number) => {
+            setProgress({ done: i, total: videoFiles.length, converting: { name, ratio } });
+          };
+          const asset = await withImportTimeout(
+            addMediaFile(project.id, videoFiles[i], onConvertProgress),
+            IMPORT_FILE_TIMEOUT_MS,
+          );
           addMediaAsset(asset);
           addSceneWithVideo(asset);
+          if (asset.codecMaybeUnsupported) newCodecWarnings.push(name);
         } catch (err) {
           console.error('動画の取り込みに失敗しました(このファイルはスキップします):', videoFiles[i].name, err);
         }
@@ -87,8 +109,9 @@ export function useClipImport(project: Project | null) {
     } finally {
       setProgress(null);
       setImporting(false);
+      setCodecWarnings(newCodecWarnings);
     }
   }
 
-  return { importVideoFiles, importing, progress };
+  return { importVideoFiles, importing, progress, codecWarnings };
 }

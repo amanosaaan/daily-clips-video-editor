@@ -145,6 +145,12 @@ export interface MediaAsset {
    *  無ければファイルの更新日時(lastModified)から取得する。 */
   shotDatetime?: string;
   shotDateSource?: 'metadata' | 'mtime';
+  /**
+   * この端末/ブラウザでは映像コーデック(HEVC/H.265等)がデコードできない可能性がある。
+   * 取り込み時にmediabunny(WebCodecs)でのデコード可否を確認した結果。trueの場合、
+   * プレビュー再生や書き出し結果でこの動画の映像だけ表示されない(音声は残る)ことがある。
+   */
+  codecMaybeUnsupported?: boolean;
 }
 
 export interface Project {
