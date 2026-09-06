@@ -31,6 +31,18 @@ export interface ClipImportProgress {
 // 書き出し自体は諦めて元のファイルのまま取り込みを続けるだけで、アプリ全体が
 // 止まったままになることはない)。
 const IMPORT_FILE_TIMEOUT_MS = 1800000;
+
+// 一括取り込みを完全に無制限で並行実行すると(実際に数十本規模のHEVC動画フォルダで
+// 発生・確認済み)、動画メタデータ取得・サムネイル生成が使う共有の排他デコードキュー
+// (videoDecodeQueue.ts、プレビュー再生の素材読み込みも同じキューを使う)が数十件分
+// 一気に詰まってしまい、プレビュー再生の素材読み込みがことごとくタイムアウトして
+// 再生できなくなる不具合が起きた。また、全ファイルの取り込みタイムアウト計測が
+// バッチ開始と同時に一斉に始まってしまうため、ffmpeg変換の順番待ちが長いファイルほど
+// 「実際の処理が始まってすらいないのに規定時間を使い切ってしまう」形で不当に
+// タイムアウトしていた。少数(2件)ずつに絞ることで、一度に処理するファイル数を
+// 現実的な範囲に抑えつつ、1本の変換待ちが全体を止めてしまう問題(元の不具合)も
+// 引き続き避けられる。
+const IMPORT_CONCURRENCY = 2;
 function withImportTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = window.setTimeout(() => reject(new Error('ファイルの取り込みがタイムアウトしました')), ms);
@@ -92,10 +104,10 @@ export function useClipImport(project: Project | null) {
 
     // 1ファイルずつ順番に「完全に取り込み終わってから次へ」進む方式だと、HEVC等の自動
     // 変換に数分掛かる1本のせいで、それ以外の(変換不要な)動画まで待たされてしまう
-    // (実際にユーザーから報告された不具合)。そのため各ファイルの取り込みは同時に
-    // 開始し、互いを待たせない(ffmpeg.wasm自体の変換はhevcConvert.ts内部で直列化
-    // されるため、変換が必要な複数ファイル自体は結局1本ずつ処理されるが、変換が
-    // 不要な他のファイルの取り込みはそれを待たずに並行して進む)。
+    // (実際にユーザーから報告された不具合)。かといって全ファイルを無制限に並行実行
+    // すると、今度は共有リソース(排他デコードキュー・ffmpeg変換キュー・タイムアウト
+    // 計測)への負荷が大きくなりすぎ、プレビュー再生が巻き添えで壊れる別の不具合が
+    // 実際に起きた。そのため、IMPORT_CONCURRENCY件までに絞った上で並行実行する。
     async function runOne(file: File): Promise<void> {
       const name = file.name;
       activeFilesRef.current.set(name, { name });
@@ -122,8 +134,17 @@ export function useClipImport(project: Project | null) {
     // 選ぶことすらできなくなる(disabledなボタンはクリックしても無反応に見える)。
     // 個々のファイル処理内の想定外のエラーだけでなく、その後(並び替え処理等)で何か
     // 起きた場合でも必ずfinallyでimporting/progressを解除する。
+    let nextIndex = 0;
+    async function worker(): Promise<void> {
+      while (nextIndex < videoFiles.length) {
+        const file = videoFiles[nextIndex++];
+        await runOne(file);
+      }
+    }
+
     try {
-      await Promise.all(videoFiles.map(runOne));
+      const workerCount = Math.min(IMPORT_CONCURRENCY, videoFiles.length);
+      await Promise.all(Array.from({ length: workerCount }, () => worker()));
       sortScenesByDate();
 
       // 新規プロジェクト作成時に自動で用意される、まだ何も置かれていない空のシーンは、
