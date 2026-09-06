@@ -425,14 +425,14 @@ export function ContextToolbar({ project, scene, layers, onOpenCrop }: Props) {
             <button
               className="context-toolbar__icon-btn"
               title="動画の向きを反時計回りに90度直す"
-              onClick={() => updateLayer(sceneId, layer.id, reorientVideoPatch(layer, asset, -90))}
+              onClick={() => updateLayer(sceneId, layer.id, reorientVideoPatch(layer, asset, -90, project.resolution))}
             >
               <RotateLeftIcon />
             </button>
             <button
               className="context-toolbar__icon-btn"
               title="動画の向きを時計回りに90度直す"
-              onClick={() => updateLayer(sceneId, layer.id, reorientVideoPatch(layer, asset, 90))}
+              onClick={() => updateLayer(sceneId, layer.id, reorientVideoPatch(layer, asset, 90, project.resolution))}
             >
               <RotateRightIcon />
             </button>

@@ -70,6 +70,110 @@ describe('reorientVideoPatch', () => {
     expect(patch).toEqual({ rotation: 270 });
   });
 
+  it('refits to the full scene canvas (not the old pillarboxed box) when rotating the main layer that fills the canvas', () => {
+    // 1080x1920の縦動画を1920x1080の16:9シーンにそのまま(トリミング無しで)配置した
+    // 直後の標準的な状態: containFitにより縦幅いっぱい(1080)・横は607.5(黒帯あり)。
+    const asset = makeAsset(1080, 1920);
+    const canvasSize = { width: 1920, height: 1080 };
+    const scale = Math.min(canvasSize.width / 1080, canvasSize.height / 1920);
+    const fittedW = 1080 * scale;
+    const fittedH = 1920 * scale;
+    const layer = makeLayer({
+      x: (canvasSize.width - fittedW) / 2,
+      y: (canvasSize.height - fittedH) / 2,
+      width: fittedW,
+      height: fittedH,
+      rotation: 0,
+    });
+
+    const patch = reorientVideoPatch(layer, asset, 90, canvasSize);
+
+    // 回転後は縦横比がほぼ16:9(canvasと一致)になるため、シーン全体を覆えるはず
+    // (回転前の小さい枠に押し込められて縮んでしまわないことを確認)
+    expect(patch.width).toBeCloseTo(canvasSize.height, 0);
+    expect(patch.height).toBeCloseTo(canvasSize.width, 0);
+    expect(patch.x! + patch.width! / 2).toBeCloseTo(canvasSize.width / 2, 0);
+    expect(patch.y! + patch.height! / 2).toBeCloseTo(canvasSize.height / 2, 0);
+  });
+
+  it('refits to the full scene canvas when rotating a landscape source in a portrait (9:16) scene (the reverse case)', () => {
+    // 1920x1080の横動画を1080x1920の9:16シーンに配置した直後の標準的な状態:
+    // containFitにより横幅いっぱい(1080)・縦は607.5(上下黒帯あり)。
+    const asset = makeAsset(1920, 1080);
+    const canvasSize = { width: 1080, height: 1920 };
+    const scale = Math.min(canvasSize.width / 1920, canvasSize.height / 1080);
+    const fittedW = 1920 * scale;
+    const fittedH = 1080 * scale;
+    const layer = makeLayer({
+      x: (canvasSize.width - fittedW) / 2,
+      y: (canvasSize.height - fittedH) / 2,
+      width: fittedW,
+      height: fittedH,
+      rotation: 0,
+    });
+
+    const patch = reorientVideoPatch(layer, asset, 90, canvasSize);
+
+    // 回転後は縦横比がほぼ9:16(canvasと一致)になるため、シーン全体を覆えるはず
+    expect(patch.width).toBeCloseTo(canvasSize.height, 0);
+    expect(patch.height).toBeCloseTo(canvasSize.width, 0);
+    expect(patch.x! + patch.width! / 2).toBeCloseTo(canvasSize.width / 2, 0);
+    expect(patch.y! + patch.height! / 2).toBeCloseTo(canvasSize.height / 2, 0);
+  });
+
+  it('keeps refitting to the full canvas across a second consecutive rotation', () => {
+    // 1回目の回転で既にシーン全体を覆っている状態から、さらにもう一度回転させても
+    // (縦横比が再度合わなくなる可能性はあるが)引き続きシーン全体を基準に判定・
+    // 再フィットされ続けるべき(回転前の小さい枠に戻ってしまわないこと)。
+    const asset = makeAsset(1080, 1920);
+    const canvasSize = { width: 1920, height: 1080 };
+    const firstPatch = reorientVideoPatch(
+      makeLayer({
+        x: (1920 - 607.5) / 2,
+        y: 0,
+        width: 607.5,
+        height: 1080,
+        rotation: 0,
+      }),
+      asset,
+      90,
+      canvasSize,
+    );
+    const rotatedLayer = makeLayer({
+      x: firstPatch.x!,
+      y: firstPatch.y!,
+      width: firstPatch.width!,
+      height: firstPatch.height!,
+      rotation: firstPatch.rotation!,
+    });
+
+    const secondPatch = reorientVideoPatch(rotatedLayer, asset, 90, canvasSize);
+
+    expect(secondPatch.rotation).toBe(180);
+    // 180度(non-sideways)は元のアスペクト比のまま=元の607.5x1080に戻るはず
+    expect(secondPatch.width).toBeCloseTo(607.5, 0);
+    expect(secondPatch.height).toBeCloseTo(1080, 0);
+    expect(secondPatch.x! + secondPatch.width! / 2).toBeCloseTo(canvasSize.width / 2, 0);
+    expect(secondPatch.y! + secondPatch.height! / 2).toBeCloseTo(canvasSize.height / 2, 0);
+  });
+
+  it('keeps the manually-sized/positioned layer footprint untouched by canvasSize (non-main overlay)', () => {
+    // 中央からずれた位置・シーン全体を覆っていない小さな枠(ワイプ等)は、
+    // canvasSizeを渡しても従来通りの「自分の枠を保つ」動作のままであるべき
+    const asset = makeAsset(1920, 1080);
+    const canvasSize = { width: 1920, height: 1080 };
+    const layer = makeLayer({ x: 50, y: 50, width: 400, height: 225, rotation: 0 });
+
+    const patch = reorientVideoPatch(layer, asset, 90, canvasSize);
+
+    expect(patch.width).toBeCloseTo(225, 5);
+    expect(patch.height).toBeCloseTo(400, 5);
+    const cx = layer.x + layer.width / 2;
+    const cy = layer.y + layer.height / 2;
+    expect(patch.x! + patch.width! / 2).toBeCloseTo(cx, 5);
+    expect(patch.y! + patch.height! / 2).toBeCloseTo(cy, 5);
+  });
+
   it('accounts for an existing crop when computing the natural aspect ratio', () => {
     const asset = makeAsset(1920, 1080);
     // 中央の正方形部分(1080x1080相当)だけをcropしている場合
