@@ -12,6 +12,24 @@ import type { FFmpeg } from '@ffmpeg/ffmpeg';
  */
 let ffmpegPromise: Promise<FFmpeg> | null = null;
 
+// ffmpeg.wasmのインスタンス(内部のworker)は1つしか用意していないため、複数の動画を
+// 同時に変換しようとしても実際には1本ずつしか処理できない。何もしないと、複数ファイルの
+// 変換が重なった際に「progressイベントのリスナーが同時に複数登録され、進捗%が別のファイル
+// 宛のものと混ざる」「仮想ファイルシステム上のファイル名が衝突する」といった問題が起きうる。
+// 呼び出し自体を直列化することで、この単一インスタンスを安全に使い回す。取り込み処理自体
+// (他のファイルのメタデータ取得やIndexedDB書き込み等)はこのキューと無関係に並行して進む。
+let conversionQueue: Promise<unknown> = Promise.resolve();
+function runSerialized<T>(fn: () => Promise<T>): Promise<T> {
+  const result = conversionQueue.then(fn, fn);
+  conversionQueue = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  return result;
+}
+
+let nextTempFileId = 0;
+
 async function getFFmpeg(): Promise<FFmpeg> {
   if (!ffmpegPromise) {
     ffmpegPromise = (async () => {
@@ -46,35 +64,39 @@ function guessInputExtension(mime: string): string {
  * 機能側の役割であり、ここでの変換はあくまで「取り込めるようにする」ための下処理)。
  */
 export async function convertToH264(blob: Blob, onProgress?: (ratio: number) => void): Promise<Blob> {
-  const ffmpeg = await getFFmpeg();
-  const { fetchFile } = await import('@ffmpeg/util');
+  return runSerialized(async () => {
+    const ffmpeg = await getFFmpeg();
+    const { fetchFile } = await import('@ffmpeg/util');
 
-  const inputName = `input${guessInputExtension(blob.type)}`;
-  const outputName = 'output.mp4';
+    // 直列化しているため衝突はしないはずだが、念のため呼び出しごとに固有のファイル名を使う。
+    const tempId = nextTempFileId++;
+    const inputName = `input${tempId}${guessInputExtension(blob.type)}`;
+    const outputName = `output${tempId}.mp4`;
 
-  const onProgressEvent = onProgress
-    ? ({ progress }: { progress: number }) => onProgress(Math.min(1, Math.max(0, progress)))
-    : undefined;
-  if (onProgressEvent) ffmpeg.on('progress', onProgressEvent);
+    const onProgressEvent = onProgress
+      ? ({ progress }: { progress: number }) => onProgress(Math.min(1, Math.max(0, progress)))
+      : undefined;
+    if (onProgressEvent) ffmpeg.on('progress', onProgressEvent);
 
-  try {
-    await ffmpeg.writeFile(inputName, await fetchFile(blob));
-    const exitCode = await ffmpeg.exec(['-i', inputName, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', outputName]);
-    if (exitCode !== 0) throw new Error(`ffmpegの変換が失敗しました(終了コード: ${exitCode})`);
-    const data = await ffmpeg.readFile(outputName);
-    const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
-    // ffmpeg.wasmが返すUint8ArrayはSharedArrayBuffer上のことがあり、そのままでは
-    // Blobのコンストラクタの型(BlobPart)と合わないため、通常のArrayBuffer上に
-    // コピーし直す。
-    const copy = new Uint8Array(bytes.length);
-    copy.set(bytes);
-    return new Blob([copy], { type: 'video/mp4' });
-  } finally {
-    if (onProgressEvent) ffmpeg.off('progress', onProgressEvent);
-    // 使い捨てのファイルは毎回消しておく(残すとインスタンスを使い回すたびに
-    // 仮想ファイルシステムにゴミが溜まる)。存在しなくても実害は無いため
-    // エラーは無視する。
-    await ffmpeg.deleteFile(inputName).catch(() => {});
-    await ffmpeg.deleteFile(outputName).catch(() => {});
-  }
+    try {
+      await ffmpeg.writeFile(inputName, await fetchFile(blob));
+      const exitCode = await ffmpeg.exec(['-i', inputName, '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '23', '-c:a', 'aac', outputName]);
+      if (exitCode !== 0) throw new Error(`ffmpegの変換が失敗しました(終了コード: ${exitCode})`);
+      const data = await ffmpeg.readFile(outputName);
+      const bytes = data instanceof Uint8Array ? data : new TextEncoder().encode(data);
+      // ffmpeg.wasmが返すUint8ArrayはSharedArrayBuffer上のことがあり、そのままでは
+      // Blobのコンストラクタの型(BlobPart)と合わないため、通常のArrayBuffer上に
+      // コピーし直す。
+      const copy = new Uint8Array(bytes.length);
+      copy.set(bytes);
+      return new Blob([copy], { type: 'video/mp4' });
+    } finally {
+      if (onProgressEvent) ffmpeg.off('progress', onProgressEvent);
+      // 使い捨てのファイルは毎回消しておく(残すとインスタンスを使い回すたびに
+      // 仮想ファイルシステムにゴミが溜まる)。存在しなくても実害は無いため
+      // エラーは無視する。
+      await ffmpeg.deleteFile(inputName).catch(() => {});
+      await ffmpeg.deleteFile(outputName).catch(() => {});
+    }
+  });
 }

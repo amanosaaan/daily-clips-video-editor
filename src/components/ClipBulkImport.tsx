@@ -55,9 +55,16 @@ export function ClipBulkImport({ project }: Props) {
       </button>
       {importing && progress && (
         <span className="clip-bulk-import__progress">
-          {progress.converting
-            ? `${progress.converting.name} を変換中… ${Math.round(progress.converting.ratio * 100)}%`
-            : `読み込み中: ${progress.done} / ${progress.total} 件`}
+          <span>
+            読み込み中: {progress.done} / {progress.total} 件
+          </span>
+          {progress.active.map((file) => (
+            <span key={file.name} className="clip-bulk-import__progress-item">
+              {file.convertingRatio != null
+                ? `${file.name} を変換中… ${Math.round(file.convertingRatio * 100)}%`
+                : `${file.name} 処理中…`}
+            </span>
+          ))}
         </span>
       )}
       <input
