@@ -31,13 +31,20 @@ export function YoutubeChaptersModal({ project, onClose }: Props) {
   }
 
   function handleDownload() {
-    const blob = new Blob([chapters], { type: 'text/plain' });
+    // 動画の書き出しとは無関係に、チャプターのテキストだけを単体でダウンロードする。
+    const blob = new Blob([chapters], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `${project.name || 'video'}_chapters.txt`;
+    a.rel = 'noopener';
+    // 一部ブラウザ(Firefox等)はDOMに繋がっていない<a>のclick()を無視する。
+    document.body.appendChild(a);
     a.click();
-    URL.revokeObjectURL(url);
+    a.remove();
+    // click()直後にrevokeするとダウンロードが始まる前にURLが無効化されて
+    // 失敗することがあるため、少し遅らせて解放する。
+    window.setTimeout(() => URL.revokeObjectURL(url), 10000);
   }
 
   return (

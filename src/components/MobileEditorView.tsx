@@ -21,6 +21,7 @@ import { ImageCropModal } from './ImageCropModal';
 import {
   AlignCenterHIcon,
   CaptionIcon,
+  ChaptersIcon,
   ChevronDownIcon,
   ChevronUpIcon,
   CloseIcon,
@@ -47,6 +48,7 @@ import { MediaLibraryPanel } from './MediaLibraryPanel';
 import { NotifySettingsModal } from './NotifySettingsModal';
 import { PreviewPanel } from './PreviewPanel';
 import { SceneTimelineStrip } from './SceneTimelineStrip';
+import { YoutubeChaptersModal } from './YoutubeChaptersModal';
 
 function formatTime(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
@@ -83,6 +85,7 @@ export function MobileEditorView() {
   const [isArrangeOpen, setArrangeOpen] = useState(false);
   const [isMediaOpen, setMediaOpen] = useState(false);
   const [isNotifySettingsOpen, setNotifySettingsOpen] = useState(false);
+  const [isChaptersOpen, setChaptersOpen] = useState(false);
   const [croppingImageLayerId, setCroppingImageLayerId] = useState<string | null>(null);
   const [multiSelectMode, setMultiSelectMode] = useState(false);
   const [isTimingOpen, setTimingOpen] = useState(false);
@@ -217,6 +220,14 @@ export function MobileEditorView() {
         </button>
         <span className="mobile-editor__app-name">デイリークリップス</span>
         <div className="mobile-editor__top-right">
+          <button
+            className="mobile-icon-btn"
+            onClick={() => setChaptersOpen(true)}
+            aria-label="YouTubeチャプターを表示"
+            title="YouTubeチャプター(撮影日ごとの目次テキスト)"
+          >
+            <ChaptersIcon size={18} />
+          </button>
           <button
             className="mobile-icon-btn"
             onClick={() => setNotifySettingsOpen(true)}
@@ -386,6 +397,7 @@ export function MobileEditorView() {
 
       {isMediaOpen && <MediaLibraryPanel project={project} scene={currentScene} onClose={() => setMediaOpen(false)} />}
       {isNotifySettingsOpen && <NotifySettingsModal onClose={() => setNotifySettingsOpen(false)} />}
+      {isChaptersOpen && <YoutubeChaptersModal project={project} onClose={() => setChaptersOpen(false)} />}
 
       {isArrangeOpen && (
         <BottomSheet
