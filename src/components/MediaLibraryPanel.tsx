@@ -4,7 +4,7 @@ import { createImageLayerForScene, createVideoLayerForScene } from '../domain/la
 import type { AudioLayer, MediaAsset, Project, Scene } from '../domain/types';
 import { addMediaFile, deleteMedia, getThumbnailUrl } from '../storage/mediaRepository';
 import { useProjectStore } from '../state/projectStore';
-import { CloseIcon, PlusIcon, TrashIcon } from './icons';
+import { CloseIcon, LayersIcon, PlusIcon, TrashIcon } from './icons';
 
 interface Props {
   project: Project;
@@ -16,6 +16,8 @@ export function MediaLibraryPanel({ project, scene, onClose }: Props) {
   const addMediaAsset = useProjectStore((s) => s.addMediaAsset);
   const removeMediaAsset = useProjectStore((s) => s.removeMediaAsset);
   const addLayerToScene = useProjectStore((s) => s.addLayerToScene);
+  const addSceneWithVideo = useProjectStore((s) => s.addSceneWithVideo);
+  const sortScenesByDate = useProjectStore((s) => s.sortScenesByDate);
   const updateSceneDuration = useProjectStore((s) => s.updateSceneDuration);
   const updateScene = useProjectStore((s) => s.updateScene);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -62,15 +64,27 @@ export function MediaLibraryPanel({ project, scene, onClose }: Props) {
     }
   }
 
+  // 動画は「日付順に並んだクリップ(シーン)」として1本ずつ追加していくのがこのアプリの
+  // 基本の使い方。まとめて取り込んだ後に1本足すケースで、現在のシーンの上に重なって
+  // しまう(=ピクチャーインピクチャー扱いになる)のは想定外だったため、動画をここから
+  // 配置するときは既定で「新しいクリップ(シーン)として追加し、撮影日順に並べ直す」
+  // ようにする(「動画を追加」ボタンと同じ挙動)。現在のシーンに重ねたい場合は
+  // overlayVideoOnScene() を使う。
+  function addVideoAsNewClip(asset: MediaAsset) {
+    addSceneWithVideo(asset);
+    sortScenesByDate();
+  }
+
+  function overlayVideoOnScene(asset: MediaAsset) {
+    const { layer, isMain } = createVideoLayerForScene(project, scene, asset);
+    addLayerToScene(scene.id, layer);
+    if (isMain && asset.durationMs) updateSceneDuration(scene.id, asset.durationMs);
+    if (isMain && asset.shotDatetime) updateScene(scene.id, { shotDate: asset.shotDatetime });
+  }
+
   function placeOnScene(asset: MediaAsset) {
     if (asset.kind === 'video') {
-      const { layer, isMain } = createVideoLayerForScene(project, scene, asset);
-      addLayerToScene(scene.id, layer);
-      // Google Vids と同様、シーンの主役となる動画を取り込んだ場合はシーンの長さを合わせる。
-      if (isMain && asset.durationMs) updateSceneDuration(scene.id, asset.durationMs);
-      // 撮影日順の並び替え・日付焼き込み・チャプター生成に使うため、主役の動画の
-      // 撮影日時をシーンにもコピーしておく。
-      if (isMain && asset.shotDatetime) updateScene(scene.id, { shotDate: asset.shotDatetime });
+      addVideoAsNewClip(asset);
     } else if (asset.kind === 'image') {
       addLayerToScene(scene.id, createImageLayerForScene(project, scene, asset));
     } else {
@@ -128,12 +142,34 @@ export function MediaLibraryPanel({ project, scene, onClose }: Props) {
                 <div className="media-library__item-actions">
                   <button
                     className="btn-icon media-library__place"
-                    title={asset.kind === 'audio' ? 'シーンにBGMとして追加' : 'シーンに配置'}
-                    aria-label={asset.kind === 'audio' ? 'シーンにBGMとして追加' : 'シーンに配置'}
+                    title={
+                      asset.kind === 'audio'
+                        ? 'シーンにBGMとして追加'
+                        : asset.kind === 'video'
+                          ? '新しいクリップとして追加(撮影日順に並ぶ)'
+                          : 'シーンに配置'
+                    }
+                    aria-label={
+                      asset.kind === 'audio'
+                        ? 'シーンにBGMとして追加'
+                        : asset.kind === 'video'
+                          ? '新しいクリップとして追加'
+                          : 'シーンに配置'
+                    }
                     onClick={() => placeOnScene(asset)}
                   >
                     <PlusIcon size={14} />
                   </button>
+                  {asset.kind === 'video' && (
+                    <button
+                      className="btn-icon media-library__place"
+                      title="今のシーンに重ねる(ワイプ/ピクチャーインピクチャー)"
+                      aria-label="今のシーンに重ねる"
+                      onClick={() => overlayVideoOnScene(asset)}
+                    >
+                      <LayersIcon size={14} />
+                    </button>
+                  )}
                   <button
                     className="btn-icon media-library__delete"
                     title="素材を削除"

@@ -255,24 +255,51 @@ async function createVideoElementFrameSource(url: string): Promise<VideoFrameSou
   canvas.width = Math.max(1, video.videoWidth);
   canvas.height = Math.max(1, video.videoHeight);
   const useFrameCallback = typeof video.requestVideoFrameCallback === 'function';
+  let warnedStuckSeek = false;
+
+  // 指定時刻へのシーク完了を待つ。'seeked'イベントは(rVFCと違い、ページが実際に
+  // 描画されていなくても)シーク完了時に確実に発火するため、こちらを主軸にする。
+  // rVFCが使える環境ではそれも「完了シグナルのひとつ」として一緒に待つ(どちらか
+  // 早い方)。可変フレームレート(VFR)のiPhone動画や、大量クリップ取り込み時の
+  // デコーダー競合下ではシークに数秒かかることがあり、以前の1〜2秒という短い
+  // タイムアウトだと毎フレーム時間切れになり、古いフレーム(多くの場合先頭フレーム)を
+  // 描き続けて「音声はあるのに映像が静止画」の書き出し結果になっていた。
+  const SEEK_WAIT_MS = 8000;
+  async function waitForSeek(target: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        video.removeEventListener('seeked', done);
+        window.clearTimeout(timer);
+        resolve();
+      };
+      const timer = window.setTimeout(done, SEEK_WAIT_MS);
+      video.addEventListener('seeked', done, { once: true });
+      if (useFrameCallback) video.requestVideoFrameCallback(() => done());
+      video.currentTime = target;
+    });
+  }
 
   return {
     canvas,
     async seek(timeSec) {
       const clamped = Math.max(0, Math.min(timeSec, video.duration || timeSec));
       if (Math.abs(video.currentTime - clamped) >= 0.001) {
-        await raceTimeout(
-          new Promise<void>((resolve) => {
-            const onSeeked = () => resolve();
-            if (useFrameCallback) {
-              video.requestVideoFrameCallback(() => resolve());
-            } else {
-              video.addEventListener('seeked', onSeeked, { once: true });
-            }
-            video.currentTime = clamped;
-          }),
-          useFrameCallback ? 2000 : 1000,
-        );
+        await waitForSeek(clamped);
+        // 1回目で目標付近に到達できていない場合(シークが詰まっている)、もう一度だけ
+        // 長めに待ち直す。それでも動かなければ、その時点の(古いかもしれない)フレームを
+        // 描くしかないが、静かに先頭フレームを描き続けるのは避けたいので警告を出す。
+        if (Math.abs(video.currentTime - clamped) > 0.5) {
+          await waitForSeek(clamped);
+          if (Math.abs(video.currentTime - clamped) > 0.5 && !warnedStuckSeek) {
+            warnedStuckSeek = true;
+            console.warn(
+              `<video>要素のシークが目標時刻に到達できませんでした(可変フレームレート等の可能性)。目標: ${clamped.toFixed(2)}s / 実際: ${video.currentTime.toFixed(2)}s`,
+            );
+          }
+        }
       }
       const ctx = canvas.getContext('2d');
       if (ctx) ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
