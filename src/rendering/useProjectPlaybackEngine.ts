@@ -132,6 +132,64 @@ export function useProjectPlaybackEngine(
   const isPlayingRef = useRef(false);
   const assetsRef = useRef<ResolvedAssetMap>(new Map());
   const audioAssetsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  // 動画/音声の音量を100%より大きくブースト(小さい音の素材向け)できるようにするための
+  // Web Audio API配線。<video>/<audio>要素自身のvolumeプロパティは仕様上0.0〜1.0にしか
+  // 設定できず(範囲外を代入すると例外になる)、素の要素だけでは100%を超える増幅が
+  // できない。そのため各要素をcreateMediaElementSourceでWeb Audioのグラフに繋ぎ、
+  // GainNode(上限の無いgain値を持てる)を経由してdestinationへ出す。実際の音量調整は
+  // このGainNodeのgain値(0以上、1.0が等倍)に対して行い、要素自身のvolumeは常に1.0
+  // (素通し)のままにする。mediaIdごとに1つ(createMediaElementSourceは同じ要素に対して
+  // 一度しか呼べないため、読み込み時に1回だけ接続する)。
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const gainNodesRef = useRef<Map<string, GainNode>>(new Map());
+
+  function getAudioContext(): AudioContext | null {
+    if (typeof window === 'undefined') return null;
+    const Ctor = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) return null;
+    if (!audioCtxRef.current) audioCtxRef.current = new Ctor();
+    return audioCtxRef.current;
+  }
+
+  /** 動画/音声要素をWeb Audioのゲインノードに接続する(まだの場合のみ)。 */
+  function ensureGainNode(mediaId: string, el: HTMLMediaElement): GainNode | null {
+    const existing = gainNodesRef.current.get(mediaId);
+    if (existing) return existing;
+    const ctx = getAudioContext();
+    if (!ctx) return null;
+    try {
+      const source = ctx.createMediaElementSource(el);
+      const gain = ctx.createGain();
+      source.connect(gain).connect(ctx.destination);
+      gainNodesRef.current.set(mediaId, gain);
+      return gain;
+    } catch (err) {
+      // Safari等、要素の状態によってはcreateMediaElementSourceが例外を投げることがある。
+      // その場合は諦めて(素の要素のvolume、100%までしか効かない)通常再生を続ける。
+      console.error('音量ブースト用のWeb Audio接続に失敗しました(通常の音量調整のみ有効):', mediaId, err);
+      return null;
+    }
+  }
+
+  /** 実際に聞こえる音量(0以上、1.0=等倍、1.0超で増幅)を設定する。ゲインノードが無い
+   * (接続失敗)場合は、せめて0〜1.0の範囲だけでも要素のvolumeで反映する。 */
+  function applyVolume(mediaId: string, el: HTMLMediaElement, volume: number): void {
+    const gain = gainNodesRef.current.get(mediaId);
+    if (gain) {
+      gain.gain.value = Math.max(0, volume);
+      if (el.volume !== 1) el.volume = 1;
+    } else {
+      el.volume = Math.max(0, Math.min(1, volume));
+    }
+  }
+
+  function disposeGainNode(mediaId: string): void {
+    const gain = gainNodesRef.current.get(mediaId);
+    if (gain) {
+      gain.disconnect();
+      gainNodesRef.current.delete(mediaId);
+    }
+  }
   // 一括取り込み中はファイルが追加されるたびにprojectが変わり、下の先読みeffectが
   // 再実行される。以前はeffectの再実行のたびに進行中の読み込みを「古い実行」として
   // 中断・破棄し、次のeffect実行でまた同じmediaIdを最初からやり直していたため、
@@ -193,6 +251,13 @@ export function useProjectPlaybackEngine(
     return () => {
       container.remove();
       hiddenContainerRef.current = null;
+      // プロジェクトを閉じてこのフックがアンマウントされる際、開いたままのAudioContextを
+      // 放置しない(Safari等はページ内で同時に開けるAudioContext数に上限があるため、
+      // プロジェクトの開閉を繰り返すと枯渇しかねない)。
+      for (const gain of gainNodesRef.current.values()) gain.disconnect();
+      gainNodesRef.current = new Map();
+      void audioCtxRef.current?.close().catch(() => {});
+      audioCtxRef.current = null;
     };
   }, []);
 
@@ -219,6 +284,8 @@ export function useProjectPlaybackEngine(
         el.remove();
       }
       audioAssetsRef.current = new Map();
+      for (const gain of gainNodesRef.current.values()) gain.disconnect();
+      gainNodesRef.current = new Map();
       loadingMediaIdsRef.current = new Set();
       mediaLoadErrorsRef.current = new Set();
       setMediaLoadErrors(mediaLoadErrorsRef.current);
@@ -247,6 +314,7 @@ export function useProjectPlaybackEngine(
         el.remove();
       }
       assetsRef.current.delete(mediaId);
+      disposeGainNode(mediaId);
     }
     for (const [mediaId, el] of audioAssetsRef.current) {
       if (referencedAudioIds.has(mediaId)) continue;
@@ -255,6 +323,7 @@ export function useProjectPlaybackEngine(
       el.load();
       el.remove();
       audioAssetsRef.current.delete(mediaId);
+      disposeGainNode(mediaId);
     }
   }, [project]);
 
@@ -320,6 +389,7 @@ export function useProjectPlaybackEngine(
         reportMediaLoadError(mediaId, url, 'この端末/ブラウザが対応していないコーデック(HEVC/H.265等)の可能性があります(videoWidth/videoHeightが0)');
       }
       assetsRef.current.set(mediaId, video);
+      ensureGainNode(mediaId, video);
     }
 
     async function loadImageAsset(mediaId: string, url: string): Promise<void> {
@@ -369,6 +439,7 @@ export function useProjectPlaybackEngine(
       );
       if (outcome === 'timeout') reportMediaLoadError(mediaId, url, 'timeout');
       audioAssetsRef.current.set(mediaId, audio);
+      ensureGainNode(mediaId, audio);
     }
 
     const windowSceneIndices = [currentSceneIndex - 1, currentSceneIndex, currentSceneIndex + 1].filter(
@@ -395,6 +466,7 @@ export function useProjectPlaybackEngine(
         el.remove();
       }
       assetsRef.current.delete(mediaId);
+      disposeGainNode(mediaId);
     }
     for (const [mediaId, el] of audioAssetsRef.current) {
       if (neededAudioIds.has(mediaId)) continue;
@@ -403,6 +475,7 @@ export function useProjectPlaybackEngine(
       el.load();
       el.remove();
       audioAssetsRef.current.delete(mediaId);
+      disposeGainNode(mediaId);
     }
 
     // 書き出し中は、書き出し処理自身が同じ直列デコードキュー(videoDecodeQueue.ts)を
@@ -502,7 +575,7 @@ export function useProjectPlaybackEngine(
               if (!el) continue;
               if (isCurrentScene) {
                 const targetSec = (layer.trimStart + position.localTimeMs) / 1000;
-                el.volume = layer.volume;
+                applyVolume(layer.mediaId, el, layer.volume);
                 syncMediaElement(el, targetSec, isPlayingRef.current, playbackRateRef.current);
               } else if (!currentSceneAudioMediaIds.has(layer.mediaId) && !el.paused) {
                 el.pause();
@@ -529,7 +602,7 @@ export function useProjectPlaybackEngine(
                 if (isCurrentScene) {
                   const targetSec = (layer.trimStart + position.localTimeMs) / 1000;
                   el.muted = layer.muted;
-                  el.volume = layer.muted ? 0 : layer.volume;
+                  applyVolume(layer.mediaId, el, layer.muted ? 0 : layer.volume);
                   syncMediaElement(el, targetSec, isPlayingRef.current, playbackRateRef.current);
                 } else if (!currentSceneVideoMediaIds.has(layer.mediaId) && !el.paused) {
                   el.pause();
@@ -604,6 +677,9 @@ export function useProjectPlaybackEngine(
     // 先に再生開始しておく（rAFループと同じsyncMediaElementを使うことで、
     // 「まず0秒から再生されてから数フレーム後に正しい位置へ飛ぶ」ような
     // 一瞬のノイズ/コマ飛びが起きないようにする）。
+    // AudioContextは(自動再生ポリシーの都合上)ユーザー操作の呼び出しスタック内でないと
+    // resume()が効かないことがあるため、再生ボタンが押されたこのタイミングで確実に呼ぶ。
+    void audioCtxRef.current?.resume().catch(() => {});
     if (project) {
       const position = resolvePosition(project, timeRef.current);
       if (position) {
@@ -615,13 +691,13 @@ export function useProjectPlaybackEngine(
               // rAFループ側(ユーザー操作ではない)で後からmuted=falseに変えると、
               // 一部のブラウザでは自動再生ポリシー的に再生が止められてしまうことがあるため。
               el.muted = layer.muted;
-              el.volume = layer.muted ? 0 : layer.volume;
+              applyVolume(layer.mediaId, el, layer.muted ? 0 : layer.volume);
               syncMediaElement(el, (layer.trimStart + position.localTimeMs) / 1000, true, playbackRateRef.current);
             }
           } else if (layer.type === 'audio') {
             const el = audioAssetsRef.current.get(layer.mediaId);
             if (el) {
-              el.volume = layer.volume;
+              applyVolume(layer.mediaId, el, layer.volume);
               syncMediaElement(el, (layer.trimStart + position.localTimeMs) / 1000, true, playbackRateRef.current);
             }
           }

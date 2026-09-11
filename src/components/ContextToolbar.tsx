@@ -34,6 +34,11 @@ import { AnimationControl, PhotoFilterControl } from './LayerPropertyControls';
 import { NumberField } from './NumberField';
 
 const FONT_OPTIONS = ['sans-serif', 'serif', 'monospace', 'Roboto', 'Noto Sans JP', 'Georgia', 'Impact', 'Courier New'];
+// 元々0(無音)〜1(等倍)までしか上げられなかったが、小さい音で録れた素材を扱う際に
+// 力不足という要望があったため、200%(2倍、+6dB相当)まで増幅できるようにした。
+// プレビュー・書き出しとも実際に音量を上げられるよう、Web Audio APIのGainNodeで
+// 実現している(useProjectPlaybackEngine.ts / exportPipeline.ts参照)。
+const VOLUME_MAX = 2;
 
 function ArrangeGroup({
   project,
@@ -399,12 +404,13 @@ export function ContextToolbar({ project, scene, layers, onOpenCrop }: Props) {
             />
           </label>
           <label>
-            音量
+            音量 {Math.round(layer.volume * 100)}%
             <input
               type="range"
               min={0}
-              max={1}
+              max={VOLUME_MAX}
               step={0.05}
+              title="100%を超えると元の音量より大きくブーストできます(小さい音の素材向け)"
               value={layer.volume}
               onChange={(e) => updateLayer(sceneId, layer.id, { volume: Number(e.target.value) })}
             />
@@ -488,12 +494,13 @@ export function ContextToolbar({ project, scene, layers, onOpenCrop }: Props) {
           />
         </label>
         <label>
-          音量
+          音量 {Math.round(layer.volume * 100)}%
           <input
             type="range"
             min={0}
-            max={1}
+            max={VOLUME_MAX}
             step={0.05}
+            title="100%を超えると元の音量より大きくブーストできます(小さい音の素材向け)"
             value={layer.volume}
             onChange={(e) => updateLayer(sceneId, layer.id, { volume: Number(e.target.value) })}
           />
