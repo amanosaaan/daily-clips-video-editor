@@ -169,13 +169,17 @@ interface Props {
   currentSceneId: string | null;
   onSelectScene: (sceneId: string) => void;
   engine: ProjectPlaybackEngine;
+  /** 書き出し範囲の指定等に使う、複数選択されているシーンID(useSceneSelection参照)。 */
+  selectedSceneIds?: string[];
+  /** シーンチップのクリックを、修飾キー込みで呼び出し元へ伝える。 */
+  onChipClick?: (sceneId: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => void;
 }
 
 function formatTime(ms: number): string {
   return (ms / 1000).toFixed(1);
 }
 
-export function StoryboardPanel({ project, currentSceneId, onSelectScene, engine }: Props) {
+export function StoryboardPanel({ project, currentSceneId, onSelectScene, engine, selectedSceneIds, onChipClick }: Props) {
   const [isTimingOpen, setTimingOpen] = useState(false);
   const [zoomPercent, setZoomPercent] = useState(100);
   const addScene = useProjectStore((s) => s.addScene);
@@ -243,6 +247,8 @@ export function StoryboardPanel({ project, currentSceneId, onSelectScene, engine
         autoCenter={false}
         zoom={zoomPercent / 100}
         onZoomChange={(nextZoom) => setZoomPercent(Math.round(nextZoom * 100))}
+        selectedSceneIds={selectedSceneIds}
+        onChipClick={onChipClick}
       />
       {isTimingOpen && currentScene && <LayerTimelinePanel scene={currentScene} project={project} engine={engine} />}
       <div className="storyboard__actions">

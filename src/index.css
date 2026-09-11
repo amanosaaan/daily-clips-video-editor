@@ -1959,6 +1959,17 @@ button.editor__menubar-item[aria-expanded='true'] {
   box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
+/* is-active(再生ヘッドがあるシーン)とは独立した、書き出し範囲等に使う複数選択の見た目
+   (Ctrl/Shift+クリック、useSceneSelection参照)。両方同時に付くこともある。 */
+.scene-timeline__chip.is-selected {
+  box-shadow: 0 0 0 2px var(--accent-soft) inset;
+}
+
+.scene-timeline__chip.is-selected.is-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft) inset;
+}
+
 .mobile-scene-add {
   flex: none;
   width: 44px;

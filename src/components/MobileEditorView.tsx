@@ -13,6 +13,7 @@ import { exportProjectToMp4, type ExportQuality } from '../export/exportPipeline
 import { sendCompletionEmail } from '../utils/emailNotify';
 import { shareOrDownloadVideo } from '../utils/exportShare';
 import { useProjectPlaybackEngine } from '../rendering/useProjectPlaybackEngine';
+import { useSceneSelection } from '../hooks/useSceneSelection';
 import { addMediaFile } from '../storage/mediaRepository';
 import { useProjectStore } from '../state/projectStore';
 import { BottomSheet } from './BottomSheet';
@@ -78,9 +79,16 @@ export function MobileEditorView() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const engine = useProjectPlaybackEngine(canvasRef, project);
   const currentSceneId = engine.position?.scene.id ?? null;
+  const sceneSelection = useSceneSelection(project);
+
+  function handleSceneChipClick(sceneId: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) {
+    sceneSelection.handleChipClick(sceneId, e, () => {
+      if (project) engine.seek(getSceneStartMs(project, sceneId));
+    });
+  }
 
   const [exportQuality, setExportQuality] = useState<ExportQuality>('high');
-  // オンにすると、プロジェクト全体ではなく現在選択中の1クリップ(シーン)だけを書き出す。
+  // オンにすると、プロジェクト全体ではなく選択中のクリップ(シーン)だけを書き出す。
   const [exportSelectedOnly, setExportSelectedOnly] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
@@ -136,9 +144,12 @@ export function MobileEditorView() {
     setExporting(true);
     setExportProgress(0);
     setExportedVideo(null);
-    // 「選択中のクリップだけ書き出す」がオンの場合、現在のシーン1つだけを含む
-    // 一時的なプロジェクトを組み立てて渡す(EditorView.tsxと同じ考え方)。
-    const exportTarget = exportSelectedOnly ? { ...project, scenes: [currentScene] } : project;
+    // 「選択中のクリップだけ書き出す」がオンの場合、選択中のシーンだけを含む一時的な
+    // プロジェクトを組み立てて渡す(EditorView.tsxと同じ考え方)。Ctrl/Shift+クリックで
+    // 複数選択していればその全て、何も選択していなければ現在のシーン1つを使う。
+    const selectedScenes = project.scenes.filter((s) => sceneSelection.selectedSceneIds.includes(s.id));
+    const scenesToExport = selectedScenes.length > 0 ? selectedScenes : [currentScene];
+    const exportTarget = exportSelectedOnly ? { ...project, scenes: scenesToExport } : project;
     try {
       const blob = await exportProjectToMp4(exportTarget, { onProgress: setExportProgress, quality: exportQuality });
       // navigator.share()はユーザー操作(タップ)から間を置かずに呼ばないと、ブラウザに
@@ -147,7 +158,7 @@ export function MobileEditorView() {
       // 切れてしまっていたと考えられる: NotAllowedError)。そのため書き出し完了直後に
       // 自動で保存を呼ぶのではなく、ユーザーが「保存する」ボタンを押した瞬間(新しい
       // ユーザー操作)にshareOrDownloadVideoを呼ぶよう変更した。
-      const filenameSuffix = exportSelectedOnly ? '_選択クリップ' : '';
+      const filenameSuffix = exportSelectedOnly ? (scenesToExport.length > 1 ? `_選択クリップ${scenesToExport.length}本` : '_選択クリップ') : '';
       setExportedVideo({ blob, filename: `${project.name || 'video'}${filenameSuffix}.mp4` });
       const notifyErr = await sendCompletionEmail(
         '【デイリークリップス】書き出しが完了しました',
@@ -342,7 +353,14 @@ export function MobileEditorView() {
         </div>
         <div className="mobile-editor__scenes">
           <ClipBulkImport project={project} />
-          <SceneTimelineStrip project={project} engine={engine} currentSceneId={currentSceneId} autoCenter />
+          <SceneTimelineStrip
+            project={project}
+            engine={engine}
+            currentSceneId={currentSceneId}
+            autoCenter
+            selectedSceneIds={sceneSelection.selectedSceneIds}
+            onChipClick={handleSceneChipClick}
+          />
           {isTimingOpen && <LayerTimelinePanel scene={currentScene} project={project} engine={engine} />}
           <div className="mobile-editor__scenes-actions">
             <button

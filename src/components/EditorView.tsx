@@ -6,6 +6,7 @@ import { exportProjectToMp4, type ExportQuality } from '../export/exportPipeline
 import { sendCompletionEmail } from '../utils/emailNotify';
 import { shareOrDownloadVideo } from '../utils/exportShare';
 import { useProjectPlaybackEngine } from '../rendering/useProjectPlaybackEngine';
+import { useSceneSelection } from '../hooks/useSceneSelection';
 import { addMediaFile } from '../storage/mediaRepository';
 import { exportProjectFile } from '../storage/projectPortability';
 import { useProjectStore } from '../state/projectStore';
@@ -48,6 +49,13 @@ export function EditorView() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const engine = useProjectPlaybackEngine(canvasRef, project);
   const currentSceneId = engine.position?.scene.id ?? null;
+  const sceneSelection = useSceneSelection(project);
+
+  function handleSceneChipClick(sceneId: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) {
+    sceneSelection.handleChipClick(sceneId, e, () => {
+      if (project) engine.seek(getSceneStartMs(project, sceneId));
+    });
+  }
 
   useEffect(() => {
     selectLayer(null);
@@ -106,12 +114,15 @@ export function EditorView() {
     setExporting(true);
     setExportProgress(0);
     setExportedVideo(null);
-    // 「選択中のクリップだけ書き出す」がオンの場合、プロジェクト全体ではなく現在の
-    // シーン1つだけを含む一時的なプロジェクトを組み立てて渡す。書き出しパイプライン
+    // 「選択中のクリップだけ書き出す」がオンの場合、プロジェクト全体ではなく選択中の
+    // シーンだけを含む一時的なプロジェクトを組み立てて渡す。書き出しパイプライン
     // (exportProjectToMp4)自体はどのプロジェクトが渡されても同じロジックで動くため、
     // scenesを差し替えるだけで実現できる(トランジションは前後のシーンが無くなる分、
-    // 自動的に効かなくなる=単体のクリップとして正しく書き出される)。
-    const exportTarget = exportSelectedOnly ? { ...project, scenes: [currentScene] } : project;
+    // 自動的に効かなくなる=単体のクリップとして正しく書き出される)。Ctrl/Shift+クリックで
+    // 複数選択していればその全て、何も選択していなければ従来通り現在のシーン1つを使う。
+    const selectedScenes = project.scenes.filter((s) => sceneSelection.selectedSceneIds.includes(s.id));
+    const scenesToExport = selectedScenes.length > 0 ? selectedScenes : [currentScene];
+    const exportTarget = exportSelectedOnly ? { ...project, scenes: scenesToExport } : project;
     try {
       const blob = await exportProjectToMp4(exportTarget, { onProgress: setExportProgress, quality: exportQuality });
       // navigator.share()はユーザー操作(クリック)から間を置かずに呼ばないと、ブラウザに
@@ -120,7 +131,7 @@ export function EditorView() {
       // 切れてしまっていたと考えられる: NotAllowedError)。そのため書き出し完了直後に
       // 自動で保存を呼ぶのではなく、ユーザーが「保存する」ボタンを押した瞬間(新しい
       // ユーザー操作)にshareOrDownloadVideoを呼ぶよう変更した(MobileEditorView.tsxと同じ)。
-      const filenameSuffix = exportSelectedOnly ? '_選択クリップ' : '';
+      const filenameSuffix = exportSelectedOnly ? (scenesToExport.length > 1 ? `_選択クリップ${scenesToExport.length}本` : '_選択クリップ') : '';
       setExportedVideo({ blob, filename: `${project.name || 'video'}${filenameSuffix}.mp4` });
       const notifyErr = await sendCompletionEmail(
         '【デイリークリップス】書き出しが完了しました',
@@ -209,7 +220,10 @@ export function EditorView() {
             </button>
           </div>
         )}
-        <label className="context-toolbar__checkbox" title="オンにすると、プロジェクト全体ではなく現在選択中の1クリップだけを書き出します">
+        <label
+          className="context-toolbar__checkbox"
+          title="オンにすると、プロジェクト全体ではなく選択中のクリップだけを書き出します(シーン一覧でCtrl/Shift+クリックすると複数選択できます)"
+        >
           <input
             type="checkbox"
             checked={exportSelectedOnly}
@@ -307,6 +321,8 @@ export function EditorView() {
             currentSceneId={currentSceneId}
             onSelectScene={(sceneId) => engine.seek(getSceneStartMs(project, sceneId))}
             engine={engine}
+            selectedSceneIds={sceneSelection.selectedSceneIds}
+            onChipClick={handleSceneChipClick}
           />
         </div>
         <Inspector

@@ -31,6 +31,13 @@ interface Props {
    * 更新すること。省略時はこの操作自体を無視する(スクロールは従来通り機能する)。
    */
   onZoomChange?: (nextZoom: number) => void;
+  /** 書き出し範囲の指定等に使う、複数選択されているシーンID(useSceneSelection参照)。 */
+  selectedSceneIds?: string[];
+  /**
+   * シーンチップのクリックを、修飾キー込みで呼び出し元へ伝える。省略時は従来通り
+   * (autoCenterのみ、修飾キー無視で常にシーク)の挙動になる。
+   */
+  onChipClick?: (sceneId: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => void;
 }
 
 const WHEEL_ZOOM_MIN = 0.5;
@@ -49,7 +56,16 @@ function getSceneMainMediaId(scene: Scene): string | null {
  * 背景に表示）の列を横スクロール表示する。autoCenterに応じて2つの見た目・挙動を切り替える
  * （詳しくはPropsのコメント参照）。PC・スマホ共通で使う。
  */
-export function SceneTimelineStrip({ project, engine, currentSceneId, autoCenter, zoom = 1, onZoomChange }: Props) {
+export function SceneTimelineStrip({
+  project,
+  engine,
+  currentSceneId,
+  autoCenter,
+  zoom = 1,
+  onZoomChange,
+  selectedSceneIds = [],
+  onChipClick,
+}: Props) {
   const reorderScenes = useProjectStore((s) => s.reorderScenes);
   const [sceneThumbUrls, setSceneThumbUrls] = useState<Record<string, string>>({});
   const scenesScrollRef = useRef<HTMLDivElement>(null);
@@ -367,18 +383,25 @@ export function SceneTimelineStrip({ project, engine, currentSceneId, autoCenter
           {project.scenes.map((scene, i) => (
             <button
               key={scene.id}
-              className={`scene-timeline__chip${scene.id === currentSceneId ? ' is-active' : ''}${sceneThumbUrls[scene.id] ? ' has-thumb' : ''}${dragOverIndex === i ? ' is-drag-over' : ''}`}
+              className={`scene-timeline__chip${scene.id === currentSceneId ? ' is-active' : ''}${selectedSceneIds.includes(scene.id) ? ' is-selected' : ''}${sceneThumbUrls[scene.id] ? ' has-thumb' : ''}${dragOverIndex === i ? ' is-drag-over' : ''}`}
               style={{
                 width: sceneChipWidthPx(scene.duration, zoom),
                 ...(sceneThumbUrls[scene.id] ? { backgroundImage: `url(${sceneThumbUrls[scene.id]})` } : undefined),
               }}
-              onClick={autoCenter ? () => engine.seek(getSceneStartMs(project, scene.id)) : undefined}
+              onClick={(e) => {
+                if (onChipClick) {
+                  onChipClick(scene.id, e);
+                  return;
+                }
+                // onChipClickを渡さない呼び出し元向けの後方互換動作(従来通り)。
+                if (autoCenter) engine.seek(getSceneStartMs(project, scene.id));
+              }}
               draggable={!autoCenter}
               onDragStart={handleChipDragStart(i)}
               onDragOver={handleChipDragOver(i)}
               onDrop={handleChipDrop(i)}
               onDragEnd={handleChipDragEnd}
-              title={!autoCenter ? `シーン${i + 1}(ドラッグで並び替え)` : undefined}
+              title={!autoCenter ? `シーン${i + 1}(ドラッグで並び替え、Ctrl/Shift+クリックで複数選択)` : 'Ctrl/Shift+クリックで複数選択'}
             >
               {i + 1}
             </button>
