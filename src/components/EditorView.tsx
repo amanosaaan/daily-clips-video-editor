@@ -52,9 +52,14 @@ export function EditorView() {
   const sceneSelection = useSceneSelection(project);
 
   function handleSceneChipClick(sceneId: string, e: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) {
-    sceneSelection.handleChipClick(sceneId, e, () => {
-      if (project) engine.seek(getSceneStartMs(project, sceneId));
-    });
+    sceneSelection.handleChipClick(
+      sceneId,
+      e,
+      () => {
+        if (project) engine.seek(getSceneStartMs(project, sceneId));
+      },
+      currentSceneId,
+    );
   }
 
   useEffect(() => {

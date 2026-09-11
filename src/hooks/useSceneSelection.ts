@@ -29,13 +29,17 @@ export function useSceneSelection(project: Project | null) {
     setSelectedSceneIds((prev) => (prev.includes(sceneId) ? prev.filter((id) => id !== sceneId) : [...prev, sceneId]));
   }
 
-  function selectRange(sceneId: string) {
+  // まだ一度もチップを操作していない状態でいきなりShift+クリックした場合、
+  // 基準にできる前回のクリック位置が無い。その場合に備えて呼び出し元から
+  // 「今プレビューしているシーン」等をfallbackAnchorとして渡してもらい、
+  // それを基準にする(渡さない/見つからない場合は、そのシーン単体の選択になる)。
+  function selectRange(sceneId: string, fallbackAnchor?: string | null) {
     if (!project) {
       selectSingle(sceneId);
       return;
     }
     const ids = project.scenes.map((s) => s.id);
-    const anchorId = anchorRef.current ?? sceneId;
+    const anchorId = anchorRef.current ?? fallbackAnchor ?? sceneId;
     const a = ids.indexOf(anchorId);
     const b = ids.indexOf(sceneId);
     if (a === -1 || b === -1) {
@@ -52,11 +56,16 @@ export function useSceneSelection(project: Project | null) {
   }
 
   /** シーンチップのクリックイベントから、修飾キーに応じた選択操作を振り分ける。 */
-  function handleChipClick(sceneId: string, modifiers: SceneClickModifiers, onPlainClick?: () => void) {
+  function handleChipClick(
+    sceneId: string,
+    modifiers: SceneClickModifiers,
+    onPlainClick?: () => void,
+    fallbackAnchor?: string | null,
+  ) {
     if (modifiers.ctrlKey || modifiers.metaKey) {
       toggle(sceneId);
     } else if (modifiers.shiftKey) {
-      selectRange(sceneId);
+      selectRange(sceneId, fallbackAnchor);
     } else {
       selectSingle(sceneId);
       onPlainClick?.();
