@@ -1928,6 +1928,7 @@ button.editor__menubar-item[aria-expanded='true'] {
 .scene-timeline__chip {
   /* 横幅は動画の長さに比例させてJS側(sceneChipWidthPx)でインラインstyleとして設定するため、
      flex-shrink/growさせず常に指定通りの幅を保つ。 */
+  position: relative;
   flex: none;
   height: 56px;
   border-radius: 10px;
@@ -1960,14 +1961,31 @@ button.editor__menubar-item[aria-expanded='true'] {
 }
 
 /* is-active(再生ヘッドがあるシーン)とは独立した、書き出し範囲等に使う複数選択の見た目
-   (Ctrl/Shift+クリック、useSceneSelection参照)。両方同時に付くこともある。 */
+   (Ctrl/Shift+クリック、useSceneSelection参照)。両方同時に付くこともある。
+   最初は薄い色のリング(box-shadow)にしていたが、動画のサムネイル(色は様々)の上では
+   ほぼ見分けが付かず、ダークモードでは黒っぽく見えてしまい「選択できているのか
+   分からない」との指摘を受けた。Google フォト等と同じ、サムネイルの色に関係なく
+   はっきり見えるチェックマーク付きバッジ方式に変更した。 */
 .scene-timeline__chip.is-selected {
-  box-shadow: 0 0 0 2px var(--accent-soft) inset;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
-.scene-timeline__chip.is-selected.is-active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft) inset;
+.scene-timeline__chip.is-selected::after {
+  content: '✓';
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 
 .mobile-scene-add {
