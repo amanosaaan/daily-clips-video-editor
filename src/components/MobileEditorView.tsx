@@ -27,6 +27,7 @@ import {
   CloseIcon,
   CopyIcon,
   ExpandIcon,
+  FocusIcon,
   ImageIcon,
   MailIcon,
   MosaicIcon,
@@ -79,6 +80,8 @@ export function MobileEditorView() {
   const currentSceneId = engine.position?.scene.id ?? null;
 
   const [exportQuality, setExportQuality] = useState<ExportQuality>('high');
+  // オンにすると、プロジェクト全体ではなく現在選択中の1クリップ(シーン)だけを書き出す。
+  const [exportSelectedOnly, setExportSelectedOnly] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
   const [exportedVideo, setExportedVideo] = useState<{ blob: Blob; filename: string } | null>(null);
@@ -133,15 +136,19 @@ export function MobileEditorView() {
     setExporting(true);
     setExportProgress(0);
     setExportedVideo(null);
+    // 「選択中のクリップだけ書き出す」がオンの場合、現在のシーン1つだけを含む
+    // 一時的なプロジェクトを組み立てて渡す(EditorView.tsxと同じ考え方)。
+    const exportTarget = exportSelectedOnly ? { ...project, scenes: [currentScene] } : project;
     try {
-      const blob = await exportProjectToMp4(project, { onProgress: setExportProgress, quality: exportQuality });
+      const blob = await exportProjectToMp4(exportTarget, { onProgress: setExportProgress, quality: exportQuality });
       // navigator.share()はユーザー操作(タップ)から間を置かずに呼ばないと、ブラウザに
       // 拒否されることが実機で確認された(iOS版Chromeで確認、書き出し処理は数秒〜
       // 数十秒かかる非同期処理のため、完了時点ではボタンを押した操作の「有効期限」が
       // 切れてしまっていたと考えられる: NotAllowedError)。そのため書き出し完了直後に
       // 自動で保存を呼ぶのではなく、ユーザーが「保存する」ボタンを押した瞬間(新しい
       // ユーザー操作)にshareOrDownloadVideoを呼ぶよう変更した。
-      setExportedVideo({ blob, filename: `${project.name || 'video'}.mp4` });
+      const filenameSuffix = exportSelectedOnly ? '_選択クリップ' : '';
+      setExportedVideo({ blob, filename: `${project.name || 'video'}${filenameSuffix}.mp4` });
       const notifyErr = await sendCompletionEmail(
         '【デイリークリップス】書き出しが完了しました',
         `「${project.name || '新しいプロジェクト'}」の書き出しが完了しました。アプリの画面に戻って保存してください。`,
@@ -220,6 +227,20 @@ export function MobileEditorView() {
         </button>
         <span className="mobile-editor__app-name">デイリークリップス</span>
         <div className="mobile-editor__top-right">
+          <button
+            className={`mobile-icon-btn${exportSelectedOnly ? ' is-active' : ''}`}
+            onClick={() => setExportSelectedOnly((v) => !v)}
+            disabled={exporting || !!exportedVideo}
+            aria-label="選択中のクリップだけ書き出す"
+            aria-pressed={exportSelectedOnly}
+            title={
+              exportSelectedOnly
+                ? '選択中のクリップだけ書き出します(タップで解除)'
+                : 'オンにすると、プロジェクト全体ではなく選択中の1クリップだけを書き出します'
+            }
+          >
+            <FocusIcon size={18} />
+          </button>
           <button
             className="mobile-icon-btn"
             onClick={() => setChaptersOpen(true)}
