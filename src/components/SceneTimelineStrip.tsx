@@ -149,6 +149,18 @@ export function SceneTimelineStrip({
     engine.seek(timelineOffsetPxToGlobalMs(project.scenes, offsetPx, zoom));
   }
   function handlePointerDown(e: ReactPointerEvent<HTMLDivElement>) {
+    // シーンチップ自身から始まったポインター操作は、チップ自身のクリック処理
+    // (選択・シーク)やドラッグ&ドロップ(並び替え)に任せ、ここでは何もしない。
+    // ここで(下のコードのように)ポインターをキャプチャしてしまうと、後続の
+    // clickイベントの対象がチップのbutton要素ではなくこのコンテナ自身になって
+    // しまう(Element.setPointerCapture()の仕様上の既知の挙動: キャプチャ後は
+    // それ由来のclickも含めてキャプチャ元の要素に向く)。そのため、実際に物理的な
+    // マウスでチップをクリックしても、チップのonClickが一切発火しなくなって
+    // いた(ユーザー報告: 「シフト・コントロール押してクリックしても何も変化が
+    // 起きない」。実機のクリックではなく直接dispatchEventしたテストでは
+    // onClickが問題なく発火するため、この不具合の発見が遅れた)。
+    if (e.target instanceof HTMLElement && e.target.closest('.scene-timeline__chip')) return;
+
     if (!autoCenter) {
       const container = scenesScrollRef.current;
       if (!container) return;
